@@ -1,0 +1,37 @@
+# AI 客户端接入
+
+## 通用 MCP
+
+在面板中选择“接入 AI → 复制 MCP JSON”。将生成的 `mcpServers.browser_control` 项添加到支持本地 stdio MCP 的客户端。生成配置包含本机用户数据目录中的 Node.js 和固定启动器路径；这些路径按目标电脑生成，不应复制到另一台电脑。
+
+固定启动器读取同目录内的 `runtime.json`，再从当前程序目录加载 MCP 服务。每次面板连接／生成接入配置时都会更新程序位置。因此同一电脑迁移程序目录后，客户端无需手动追踪原安装目录。
+
+源码模式也可以使用 `node` 运行仓库的 `bridge/entry.mjs`，使用默认或已保存的数据目录；这需要目标电脑已有 Node.js，并在移动仓库后手动更新配置。
+
+## GPT / Codex
+
+推荐使用面板“接入 AI → 安装到 Codex”，直接安装包含浏览器工具和操作指引的原生插件。exe、本地服务和 DSH 接入继续保留。完整说明见 [Codex 原生插件](codex-plugin.md)。
+
+面板“旧版 MCP 配置接入”面向读取 `.codex/config.toml` 的本地执行客户端。安装器先验证 TOML 语法，在所选数据目录的 `client-config-backups` 下备份已有配置，保留其他配置和注释，只管理自己带标记的 `browser_control` 小节。客户端配置本身仍写入该客户端已有的位置。
+
+如果已有另一个同名服务器，安装器不会覆盖它。请先移除旧版同名配置，或通过客户端的 MCP 表单手动导入 JSON。已有会话通常需要重启／新建会话才能获得新工具。
+
+这不保证所有 ChatGPT 普通聊天窗口、账号或组织策略都允许本地工具。只支持远程 HTTPS MCP 的客户端无法直接使用本项目的 stdio 服务。
+
+## DeepSeek Harness
+
+面板“生成 DSH 插件”在当前用户数据目录生成一个有效的 Cordis bundle，并提供本机安装命令。可以在 DSH 添加本地插件，或运行生成的 `dsh plugin --profile web add ...` 命令。插件通过官方 `@deepseek-ai/dsh-mcp-client` 暴露 11 个工具。
+
+生成后点击“复制插件地址”（在“打开插件目录”上方），将文件夹路径直接粘贴到 DSH 添加本地插件的位置即可。
+
+安装至其他 profile 时修改命令中的 profile 名称。独立 DSH Desktop profile 应通过该桌面客户端自己的插件管理入口安装；npm CLI 不负责管理它。
+
+同名插件已安装时先在 DSH 中更新／移除旧版，不要重复注册同一个服务器名称。停用 DSH bundle 只卸载 DSH 的连接，不移除浏览器扩展或 GPT 配置。
+
+截图是否能被模型理解取决于该模型与 DSH 的附件能力；不能接收图像的模型仍可使用正文和元素快照。两个 AI 共用服务时，请避免同时操作同一页面。
+
+## 参考
+
+- [OpenAI 本地 MCP 配置](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
+- [OpenAI 桌面插件](https://developers.openai.com/plugins/deploy/desktop-only)
+- [DSH MCP 客户端](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/mcp/mcp-client)

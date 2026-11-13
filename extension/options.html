@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Browser Control · 连接设置</title><link rel="stylesheet" href="ui.css"></head><body><main>
+<h1>连接 Browser Control</h1><p>在控制面板点击“配对浏览器”，复制配对码，完整粘贴到这里。</p>
+<form id="form"><label for="pairing-code">配对码</label><input id="pairing-code" type="password" autocomplete="off" spellcheck="false" placeholder="bc1:端口:配对码">
+<details><summary>高级设置／旧版配对方式</summary><label for="port">本地服务端口</label><input id="port" type="number" min="1024" max="65535" value="19487">
+<label for="token">配对密钥</label><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 位配对密钥"></details>
+<div class="actions"><button type="submit">保存并连接</button><button id="disconnect" type="button" class="secondary">断开并撤销全部授权</button></div></form>
+<div id="status" class="status">正在检查连接…</div><p id="message" role="status"></p>
+<p class="muted">连接成功后，切换到要操作的网页，点击扩展图标，再选择“允许 AI 操作当前网页”。跳转到其他网站需要重新授权。网页内容和截图作为工具结果返回时会进入 AI 会话。</p>
+</main><script src="options.js" type="module"></script></body></html>

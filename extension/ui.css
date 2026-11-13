@@ -1,0 +1,24 @@
+:root { color-scheme: light; font: 14px/1.6 "Microsoft YaHei", system-ui, sans-serif; color: #1e293b; background: #f1f5f9; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(100%, 620px); margin: 32px auto; padding: 28px; background: white; border: 1px solid #e2e8f0; border-radius: 18px; }
+body.popup { width: 360px; }
+.popup main { margin: 0; border: 0; border-radius: 0; padding: 20px; }
+h1 { font-size: 22px; line-height: 1.4; margin: 0 0 8px; }
+p { margin: 8px 0 16px; }
+.muted { color: #64748b; font-size: 12px; }
+.status { padding: 12px; border-radius: 10px; background: #f1f5f9; margin: 14px 0; overflow-wrap: anywhere; }
+.status.connected { background: #ecfdf5; color: #065f46; }
+label { display: block; margin: 16px 0 6px; font-weight: 600; }
+input { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
+button { padding: 10px 14px; border: 0; border-radius: 8px; background: #0f766e; color: white; font: inherit; cursor: pointer; }
+button.secondary { background: #e2e8f0; color: #334155; }
+button.danger { background: #b91c1c; }
+button:disabled { opacity: .5; cursor: default; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.wide { width: 100%; }
+#message { white-space: pre-wrap; color: #b91c1c; }
+#message.success { color: #065f46; }
+code { font-size: 12px; background: #f1f5f9; padding: 2px 4px; }
+.tab { padding: 8px 0; border-bottom: 1px solid #e2e8f0; overflow-wrap: anywhere; }
+.tab button { padding: 3px 8px; margin-left: 6px; font-size: 12px; }

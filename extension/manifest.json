@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Browser Control",
+  "version": "1.1.0",
+  "description": "通过本地 MCP 服务操作用户授权的网页，支持 GPT、DSH 和其他 MCP 客户端。",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "GPT 浏览器控制",
+    "default_icon": "icons/icon128.png"
+  },
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*"
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}

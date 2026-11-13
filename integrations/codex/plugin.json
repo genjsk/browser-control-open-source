@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "browser-control",
+  "version": "1.1.0",
+  "description": "Use the existing browser through the Browser Control extension and local desktop service.",
+  "author": { "name": "Browser Control contributors" },
+  "license": "MIT",
+  "keywords": ["browser", "chrome", "edge", "mcp", "local"],
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "onboardingSkill": "./skills/browser-control/SKILL.md",
+      "interface": {
+        "displayName": "浏览器控制",
+        "shortDescription": "操作已授权的 Chrome / Edge 网页，保留本地控制面板。",
+        "longDescription": "复用本机 Browser Control 服务，读取、点击、填写和截图。浏览器扩展授权网页，exe 管理连接、断开、配对与数据存储。",
+        "developerName": "Browser Control",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "defaultPrompt": ["检查浏览器控制连接，并读取我已经授权的网页。"],
+        "brandColor": "#0F766E",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png"
+      }
+    }
+  }
+}

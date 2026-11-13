@@ -1,0 +1,13 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>浏览器控制验收页面</title>
+<style>body{font:18px/1.8 sans-serif;max-width:800px;margin:40px auto}input,select,button{font:inherit;padding:10px;margin:8px}section{margin-top:30px}#spacer{height:1400px}</style>
+<h1>浏览器控制验收页面</h1><form id="search"><label>搜索关键词<input id="query" name="query" type="search"></label><button>搜索</button></form>
+<div id="result">等待搜索</div><label>密码<input type="password" value="do-not-send-password"></label>
+<div data-private>do-not-send-private-note</div><input type="hidden" value="do-not-send-token">
+<label>选项<select id="choice"><option value="a">选项 A</option><option value="b">选项 B</option></select></label>
+<label><input type="checkbox" id="check">同意测试</label><button id="counter">计数</button><span id="count">0</span>
+<div id="shadow"></div><iframe src="/frame"></iframe><div id="spacer"></div><p>页面底部</p>
+<script>
+document.querySelector('#search').addEventListener('submit',event=>{event.preventDefault();document.querySelector('#result').textContent='搜索结果：'+document.querySelector('#query').value});
+document.querySelector('#counter').onclick=()=>{document.querySelector('#count').textContent=Number(document.querySelector('#count').textContent)+1};
+document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button id="shadow-button">Shadow 按钮</button>';
+</script></html>

@@ -1,0 +1,48 @@
+name: Build release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npx playwright install chromium
+      - run: npm run test:browser
+      - run: npm run prepare:release
+      - run: python -m pip install -r requirements-build.txt
+      - run: python scripts/build-gui.py
+      - run: npm run package:portable
+      - run: python tests/release_smoke.py
+      - run: python tests/gui_storage.py
+      - run: npm run package:source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-control-release
+          path: |
+            release/*.zip
+            release/*.sha256
+      - name: Publish version tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $artifacts = @(Get-ChildItem release -File | Where-Object { $_.Extension -in '.zip', '.sha256' } | Select-Object -ExpandProperty FullName)
+          gh release create $env:RELEASE_TAG @artifacts --generate-notes --verify-tag

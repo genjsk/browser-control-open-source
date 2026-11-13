@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Browser Control</title><link rel="stylesheet" href="ui.css"></head>
+<body class="popup"><main>
+<h1>Browser Control</h1><p class="muted">只操作你授权的标签页，可随时暂停。</p>
+<div id="status" class="status">正在检查连接…</div>
+<button id="grant" class="wide" disabled>允许 AI 操作当前网页</button>
+<div class="actions"><button id="pause" class="danger">暂停全部</button><button id="resume" class="secondary">继续</button><button id="settings" class="secondary">连接设置</button></div>
+<div id="tabs"></div><p id="last" class="muted"></p><p id="message" role="status"></p>
+</main><script src="popup.js" type="module"></script></body></html>
