@@ -95,17 +95,6 @@ npm start
 
 本地服务只监听 `127.0.0.1`，需要配对凭据，并拒绝普通网页来源的直接控制请求。更多边界见 [SECURITY.md](SECURITY.md)。
 
-## 开发与发布
-
-```sh
-npm ci --cache .local/npm-cache
-npm run check
-npm test
-# 浏览器验收：先下载 Playwright Chromium
-npx playwright install chromium
-npm run test:browser
-```
-
 Windows 便携包构建：
 
 ```sh
