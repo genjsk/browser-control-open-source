@@ -45,7 +45,6 @@
     for (const node of container.querySelectorAll('*')) {
       if (node.matches('a[href],button,input,textarea,select,[role="button"],[role="link"],[role="textbox"],[contenteditable="true"],[tabindex]')) output.push(node);
       if (node.shadowRoot) deepElements(node.shadowRoot, output);
-      if (output.length > 3000) break;
     }
     return output;
   }
@@ -65,7 +64,6 @@
           value: node.matches('input,textarea,select') ? String(node.value).slice(0, 500) : undefined,
           options: node.tagName === 'SELECT' ? [...node.options].slice(0, 80).map(option => ({ value: option.value, label: option.label })) : undefined
         });
-        // if (interactive.length >= 250) break;
       }
       return { snapshotId, title: document.title, url: location.href, text: bodyText(args.maxText || 8000), elements: interactive, contentTrust: 'untrusted-page-data' };
     }
