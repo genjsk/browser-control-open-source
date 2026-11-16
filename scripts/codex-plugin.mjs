@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import TOML from '@iarna/toml';
 import { root, localDir, version, writeJson } from '../bridge/config.mjs';
-import { registerRuntime } from './integration.mjs';
+import { aiInstances, registerRuntime } from './integration.mjs';
 
 const execute = promisify(execFile);
 export const pluginName = 'browser-control';
@@ -30,7 +30,7 @@ export function findCodex(env = process.env) {
   throw new Error('未找到支持插件的 Codex CLI。插件文件已生成，可在 Codex 添加本地插件市场，或安装 Codex CLI 后重试。');
 }
 export async function prepareCodexPlugin() {
-  const entry = await registerRuntime();
+  const { instance, ...entry } = await registerRuntime(aiInstances.codexNative);
   const marketplaceDir = path.join(localDir, 'codex-plugin-marketplace');
   const directory = path.join(marketplaceDir, 'plugins', pluginName);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -42,7 +42,7 @@ export async function prepareCodexPlugin() {
     const data = JSON.parse(await readFile(file, 'utf8'));
     await writeJson(file, { ...data, version });
   }
-  await writeJson(path.join(directory, 'local-runtime.json'), { dataDir: localDir });
+  await writeJson(path.join(directory, 'local-runtime.json'), { dataDir: localDir, instance: aiInstances.codexNative.id });
   await writeJson(path.join(directory, 'mcp.json'), {
     $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
     mcpServers: { browser_control_native: { type: 'stdio', ...entry } }
@@ -55,7 +55,7 @@ export async function prepareCodexPlugin() {
     plugins: [{ name: pluginName, source: { source: 'local', path: `./plugins/${pluginName}` },
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity' }]
   });
-  return { directory, marketplaceDir, plugin: pluginSelector,
+  return { directory, marketplaceDir, plugin: pluginSelector, instance,
     command: `codex plugin marketplace add ${quote(marketplaceDir)}\ncodex plugin add ${pluginSelector}`,
     message: 'Codex 本地插件已生成，exe、浏览器扩展和本地服务继续保留。' };
 }
@@ -83,8 +83,14 @@ async function removeOwnedLegacyConfig() {
   const section = /^[ \t]*\[mcp_servers\.browser_control\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/m.exec(original);
   if (!section || section.index < first || section.index > last) return false;
   const afterHeader = section.index + section[0].length;
-  const nextHeader = /^[ \t]*\[[^\r\n]+\][ \t]*(?:#[^\r\n]*)?$/m.exec(original.slice(afterHeader));
-  const stop = nextHeader ? afterHeader + nextHeader.index : original.length;
+  // Also remove our owned sub-tables (for example browser_control.env) before
+  // stopping at the next unrelated table.
+  const header = /^[ \t]*\[([^\]\r\n]+)\][ \t]*(?:#[^\r\n]*)?$/gm;
+  header.lastIndex = afterHeader;
+  let stop = original.length;
+  for (let match = header.exec(original); match; match = header.exec(original)) {
+    if (!match[1].trim().startsWith('mcp_servers.browser_control.')) { stop = match.index; break; }
+  }
   const withoutServer = original.slice(0, section.index) + original.slice(stop);
   const changed = withoutServer.split('\n').filter(line => ![start, end].includes(line.trim())).join('\n');
   TOML.parse(changed.replace(/^\uFEFF/, ''));

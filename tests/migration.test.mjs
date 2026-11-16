@@ -24,6 +24,11 @@ test('migration preserves data, keys, settings and DSH paths, then removes the o
   fs.mkdirSync(nativeDir, { recursive: true });
   fs.writeFileSync(path.join(nativeDir, 'local-runtime.json'), JSON.stringify({ dataDir: at.source }));
   fs.writeFileSync(path.join(nativeDir, 'mcp.json'), JSON.stringify({ mcpServers: { browser_control_native: { command: path.join(at.source, 'node.exe'), args: [path.join(at.source, 'mcp-launcher.cjs')] } } }));
+  const instances = JSON.stringify({ version: 1, instances: { dsh: { id: 'dsh', client: 'DeepSeek Harness', paused: true, lastSeen: 1 } } });
+  const token = JSON.stringify({ instanceId: 'dsh', token: 'fixture-token-not-a-secret', hash: 'fixture', createdAt: 1 });
+  fs.writeFileSync(path.join(at.source, 'ai-instances.json'), instances);
+  fs.writeFileSync(path.join(at.source, 'ai-token-dsh.json'), token);
+  fs.writeFileSync(path.join(at.source, 'identity-19546.json'), JSON.stringify({ serviceId: 'a'.repeat(32), pairingId: 'b'.repeat(32), createdAt: 1 }));
   let stopped = false;
   const result = await migrateStorage({ ...at, stopServices: async () => { stopped = true; assert.ok(fs.existsSync(path.join(at.source, '.migration.lock'))); } });
   assert.ok(stopped && result.migrated && !result.cleanupIncomplete);
@@ -31,6 +36,9 @@ test('migration preserves data, keys, settings and DSH paths, then removes the o
   assert.equal(fs.readFileSync(path.join(at.target, 'credentials-19546.json'), 'utf8'), 'private-fixture-data');
   assert.deepEqual(fs.readFileSync(path.join(at.target, 'cache', 'keep.bin')), Buffer.from([0, 255, 16, 32]));
   assert.equal(JSON.parse(fs.readFileSync(path.join(at.target, 'settings.json'))).port, 19546);
+  assert.equal(fs.readFileSync(path.join(at.target, 'ai-instances.json'), 'utf8'), instances);
+  assert.equal(fs.readFileSync(path.join(at.target, 'ai-token-dsh.json'), 'utf8'), token);
+  assert.ok(fs.existsSync(path.join(at.target, 'identity-19546.json')));
   assert.equal(readDataDirectory({ root: at.root, env: { ...process.env, BROWSER_CONTROL_DATA_DIR: '' } }), at.target);
   const patch = JSON.parse(fs.readFileSync(path.join(at.target, 'dsh-plugin', 'cordis.patch.yml')));
   assert.equal(patch[0].insert[0].config.command, path.join(at.target, 'node.exe'));

@@ -48,6 +48,15 @@ def choose_storage(project: Path, parent, initial: Path | None = None) -> Path |
     return destination
 
 
+def format_time(value):
+    if not value:
+        return '—'
+    try:
+        return time.strftime('%m-%d %H:%M', time.localtime(value / 1000))
+    except (OverflowError, OSError, ValueError):
+        return '—'
+
+
 class BridgeController:
     def __init__(self, project: Path, port: int | None = None):
         self.project = project.resolve()
@@ -79,7 +88,7 @@ class BridgeController:
         return find_node(self.project)
 
     def run(self, mode: str, *arguments) -> dict:
-        if mode not in ('start', 'stop', 'restart', 'setup', 'info', 'integrate-codex', 'prepare-dsh', 'prepare-codex-plugin', 'install-codex-plugin', 'set-port', 'migrate-storage'):
+        if mode not in ('start', 'stop', 'restart', 'setup', 'info', 'integrate-codex', 'prepare-dsh', 'prepare-codex-plugin', 'install-codex-plugin', 'set-port', 'migrate-storage', 'ai-instance-pause', 'ai-instance-resume'):
             raise ValueError('Unsupported operation')
         script = self.project / 'scripts' / 'cli.mjs'
         if not script.is_file():
@@ -99,12 +108,52 @@ class BridgeController:
             raise RuntimeError(error or '操作失败，请查看服务日志。')
         return json.loads(result.stdout)
 
+    def local_instances(self) -> list:
+        """Installed AI records with a locally computed status, used offline."""
+        file = self.local / 'ai-instances.json'
+        try:
+            entries = json.loads(file.read_text(encoding='utf-8')).get('instances', [])
+        except (OSError, ValueError):
+            return []
+        now = time.time() * 1000
+        result = []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or not entry.get('id'):
+                continue
+            seen = entry.get('lastSeenAt') or 0
+            if entry.get('paused'):
+                status = 'paused'
+            elif seen and now - seen <= 45000:
+                status = 'online'
+            elif seen:
+                status = 'offline'
+            else:
+                status = 'installed'
+            result.append({
+                'id': entry['id'], 'client': entry.get('client', ''), 'name': entry.get('name', ''),
+                'transport': entry.get('transport', ''), 'port': entry.get('port'),
+                'status': status, 'paused': bool(entry.get('paused')),
+                'lastSeenAt': entry.get('lastSeenAt'), 'lastCallAt': entry.get('lastCallAt'),
+                'installedAt': entry.get('installedAt'),
+            })
+        result.sort(key=lambda item: item.get('installedAt') or 0)
+        return result
+
+    @staticmethod
+    def settle_instances(state: dict) -> dict:
+        # A stopped service cannot hold an MCP session, so nothing is online.
+        if not state.get('running'):
+            for item in state.get('instances', []):
+                if item.get('status') == 'online':
+                    item['status'] = 'offline'
+        return state
+
     def status(self) -> dict:
         state = dict(running=False, connected=False, paused=True, tabs=0,
-                     enabled=not self.disabled.exists(), error='')
+                     instances=self.local_instances(), enabled=not self.disabled.exists(), error='')
         credentials = self.local / f'credentials-{self.port}.json'
         if not credentials.is_file():
-            return state
+            return self.settle_instances(state)
         try:
             token = json.loads(credentials.read_text(encoding='utf-8'))['adminToken']
             request = urllib.request.Request(
@@ -115,8 +164,11 @@ class BridgeController:
                 payload = json.load(response)
             state.update(running=True, connected=payload.get('connected', False),
                          paused=payload.get('paused', True), tabs=len(payload.get('authorizedTabs', [])))
+            if isinstance(payload.get('instances'), list):
+                state['instances'] = payload['instances']
         except urllib.error.HTTPError as error:
-            state['error'] = '旧版或其他程序正在使用连接端口。请先断开旧版，或点击“设置”修改端口。' if error.code == 403 else f'无法读取状态（HTTP {error.code}）。'
+            state['error'] = ('端口上的服务身份校验失败：可能属于其他 Browser Control 实例，或配对信息已变化。请重新连接。'
+                              if error.code == 403 else f'无法读取状态（HTTP {error.code}）。')
         except urllib.error.URLError as error:
             if isinstance(error.reason, OSError) and getattr(error.reason, 'winerror', None) == 10061:
                 pass
@@ -126,7 +178,7 @@ class BridgeController:
                 state['error'] = '暂时无法读取服务状态。'
         except (OSError, ValueError, KeyError):
             state['error'] = '无法读取本机连接信息，请重新启动服务。'
-        return state
+        return self.settle_instances(state)
 
 
 class ControlPanel(tk.Tk):
@@ -139,8 +191,8 @@ class ControlPanel(tk.Tk):
             self.iconbitmap(default=str(asset_root / 'browser-control.ico'))
         self._window_icon = tk.PhotoImage(file=str(asset_root / 'browser-control-128.png'))
         self.iconphoto(True, self._window_icon)
-        self.geometry('660x700' if controller.storage_note else '660x650')
-        self.minsize(640, 680 if controller.storage_note else 630)
+        self.geometry('900x900' if controller.storage_note else '900x860')
+        self.minsize(860, 840 if controller.storage_note else 800)
         self.configure(bg='#f3f6fb')
         self.busy = False
         self.polling = False
@@ -188,7 +240,39 @@ class ControlPanel(tk.Tk):
         self.ai_button = ttk.Button(extras, text='接入 AI', command=lambda: self.perform('info', purpose='ai'))
         self.ai_button.pack(side='left')
         ttk.Button(extras, text='设置', command=self.settings_dialog).pack(side='right')
-        self.message = tk.Label(wrap, text=controller.storage_note if controller.storage_mode == 'fallback' else '连接后，请在浏览器扩展中授权要操作的网页。', bg='#f3f6fb', fg='#64748b', wraplength=535, justify='left', anchor='w')
+        ai_card = tk.Frame(wrap, bg='white', padx=14, pady=10, highlightbackground='#e2e8f0', highlightthickness=1)
+        ai_card.pack(fill='both', expand=True, pady=(14, 0))
+        ai_header = tk.Frame(ai_card, bg='white')
+        ai_header.pack(fill='x')
+        tk.Label(ai_header, text='AI 接入情况', bg='white', fg='#0f172a', font=('Microsoft YaHei UI', 11, 'bold')).pack(side='left')
+        tk.Label(ai_header, text='安装记录与 MCP 会话状态分开显示', bg='white', fg='#94a3b8', font=('Microsoft YaHei UI', 9)).pack(side='right')
+        table = tk.Frame(ai_card, bg='white')
+        table.pack(fill='both', expand=True, pady=(8, 0))
+        self.ai_table = ttk.Treeview(table, columns=('client', 'transport', 'port', 'status', 'last'), show='headings', height=5, selectmode='browse')
+        for key, title, width, anchor in (
+            ('client', 'AI 客户端 / 实例', 290, 'w'),
+            ('transport', '接入方式', 190, 'w'),
+            ('port', '端口', 64, 'center'),
+            ('status', '状态', 74, 'center'),
+            ('last', '最近调用', 120, 'center'),
+        ):
+            self.ai_table.heading(key, text=title)
+            self.ai_table.column(key, width=width, anchor=anchor, stretch=key in ('client', 'transport'))
+        table_scroll = ttk.Scrollbar(table, orient='vertical', command=self.ai_table.yview)
+        self.ai_table.configure(yscrollcommand=table_scroll.set)
+        self.ai_table.pack(side='left', fill='both', expand=True)
+        table_scroll.pack(side='right', fill='y')
+        self.ai_table.bind('<<TreeviewSelect>>', lambda event: self.update_instance_buttons())
+        ai_actions = tk.Frame(ai_card, bg='white')
+        ai_actions.pack(fill='x', pady=(8, 0))
+        self.pause_instance_button = ttk.Button(ai_actions, text='暂停调用', command=lambda: self.pause_selected(True))
+        self.pause_instance_button.pack(side='left')
+        self.resume_instance_button = ttk.Button(ai_actions, text='恢复调用', command=lambda: self.pause_selected(False))
+        self.resume_instance_button.pack(side='left', padx=8)
+        self.ai_hint = tk.Label(ai_actions, text='暂停由本地服务强制执行，其他 AI 实例不受影响。', bg='white', fg='#94a3b8',
+                                font=('Microsoft YaHei UI', 9), wraplength=360, justify='right')
+        self.ai_hint.pack(side='right')
+        self.message = tk.Label(wrap, text=controller.storage_note if controller.storage_mode == 'fallback' else '连接后，请在浏览器扩展中授权要操作的网页。', bg='#f3f6fb', fg='#64748b', wraplength=770, justify='left', anchor='w')
         self.message.pack(fill='x', pady=(16, 0))
         footer = tk.Frame(wrap, bg='#f3f6fb')
         footer.pack(side='bottom', fill='x', pady=(12, 0))
@@ -196,7 +280,7 @@ class ControlPanel(tk.Tk):
         self.address_label.pack(anchor='w')
         tk.Label(footer, text='关闭此窗口不改变连接状态；“断开”后不会被 AI 自动重启。', bg='#f3f6fb', fg='#94a3b8', font=('Microsoft YaHei UI', 9)).pack(anchor='w', pady=(3, 0))
         if controller.storage_note:
-            self.storage_label = tk.Label(footer, text=f'数据目录：{controller.local}', bg='#f3f6fb', fg='#64748b', wraplength=590, justify='left', font=('Microsoft YaHei UI', 9))
+            self.storage_label = tk.Label(footer, text=f'数据目录：{controller.local}', bg='#f3f6fb', fg='#64748b', wraplength=780, justify='left', font=('Microsoft YaHei UI', 9))
             self.storage_label.pack(anchor='w', pady=(3, 0))
         self.after(60, self.consume)
         self.after(100, self.poll)
@@ -241,8 +325,10 @@ class ControlPanel(tk.Tk):
             return
         self.busy = True
         self.last_error = ''
-        for button in (self.connect_button, self.disconnect_button, self.restart_button, self.pair_button):
-            button.configure(state='disabled')
+        for button in (self.connect_button, self.disconnect_button, self.restart_button, self.pair_button,
+                       getattr(self, 'pause_instance_button', None), getattr(self, 'resume_instance_button', None)):
+            if button is not None:
+                button.configure(state='disabled')
         self.message.configure(text={'start': '正在连接…', 'stop': '正在断开，等待服务退出…', 'restart': '正在重新连接…', 'migrate-storage': '正在断开服务、迁移并校验旧数据，请等待完成…', 'install-codex-plugin': '正在安装 Codex 本地插件…'}.get(mode, '正在准备…'), fg='#64748b')
 
         def work():
@@ -278,8 +364,37 @@ class ControlPanel(tk.Tk):
             'tabs': str(state['tabs']),
         }.items():
             self.values[key].configure(text=value)
+        self.render_instances(state.get('instances', []))
         if state['error'] and not self.busy:
             self.message.configure(text=state['error'], fg='#b91c1c')
+
+    def render_instances(self, instances):
+        selected = self.ai_table.selection()
+        self.ai_table.delete(*self.ai_table.get_children())
+        for entry in instances:
+            if not entry.get('id'):
+                continue
+            status = {'online': '在线', 'offline': '离线', 'paused': '已暂停', 'installed': '已安装'}.get(entry.get('status'), entry.get('status', ''))
+            self.ai_table.insert('', 'end', iid=entry['id'], values=(
+                f"{entry.get('client', '')} · {entry.get('name', '')}".strip(' ·'),
+                entry.get('transport', ''), entry.get('port', ''),
+                status, format_time(entry.get('lastCallAt')),
+            ))
+        if selected and self.ai_table.exists(selected[0]):
+            self.ai_table.selection_set(selected[0])
+        self.update_instance_buttons()
+
+    def update_instance_buttons(self):
+        selection = self.ai_table.selection()
+        status = self.ai_table.item(selection[0], 'values')[3] if selection else ''
+        available = not self.busy
+        self.pause_instance_button.configure(state='normal' if available and status in ('在线', '离线', '已安装') else 'disabled')
+        self.resume_instance_button.configure(state='normal' if available and status == '已暂停' else 'disabled')
+
+    def pause_selected(self, paused):
+        selection = self.ai_table.selection()
+        if selection:
+            self.perform('ai-instance-pause' if paused else 'ai-instance-resume', selection[0])
 
     def consume(self):
         try:
@@ -295,6 +410,7 @@ class ControlPanel(tk.Tk):
                     self.busy = False
                     for button in (self.connect_button, self.disconnect_button, self.restart_button, self.pair_button):
                         button.configure(state='normal')
+                    self.update_instance_buttons()
                     if kind == 'error':
                         self.last_error = data
                         self.message.configure(text=data, fg='#b91c1c')
@@ -465,10 +581,20 @@ def smoke_test(app: ControlPanel, report: Path, migrate_to: Path | None = None):
                 if mode == 'info':
                     if not app.last_output.get('mcp', {}).get('mcpServers', {}).get('browser_control'):
                         raise RuntimeError('AI integration configuration missing')
+                    if not any(item.get('id') == 'generic-mcp' for item in state.get('instances', [])):
+                        raise RuntimeError('AI instance registry missing the generic entry')
                 if mode == 'prepare-codex-plugin':
                     plugin = Path(app.last_output['directory'])
                     if not (plugin / 'plugin.json').is_file() or not (plugin / '.mcp.json').is_file():
                         raise RuntimeError('Native Codex plugin files missing')
+                    if not any(item.get('id') == 'codex-native' for item in state.get('instances', [])):
+                        raise RuntimeError('AI instance registry missing the Codex entry')
+                    app.controller.run('ai-instance-pause', 'codex-native')
+                    if not any(item['id'] == 'codex-native' and item['status'] == 'paused' for item in app.controller.status()['instances']):
+                        raise RuntimeError('AI instance pause was not persisted')
+                    app.controller.run('ai-instance-resume', 'codex-native')
+                    if any(item['id'] == 'codex-native' and item['status'] == 'paused' for item in app.controller.status()['instances']):
+                        raise RuntimeError('AI instance resume was not persisted')
                 if mode == 'migrate-storage':
                     if old_data.exists() or app.controller.local != migrate_to:
                         raise RuntimeError('Migration did not switch and clean the old directory')
@@ -477,6 +603,8 @@ def smoke_test(app: ControlPanel, report: Path, migrate_to: Path | None = None):
                 if mode == 'stop':
                     if state['enabled']:
                         raise RuntimeError('Manual disconnect did not persist')
+                    if any(item.get('status') == 'online' for item in state.get('instances', [])):
+                        raise RuntimeError('AI instance still shown online after disconnect')
                     result = subprocess.run([app.controller.node(), '--input-type=module', '-e', "import {ensureDaemon} from './bridge/client.mjs'; await ensureDaemon();"], cwd=app.controller.project, env={**os.environ, 'BROWSER_BRIDGE_PORT': str(app.controller.port), 'BROWSER_CONTROL_DATA_DIR': str(app.controller.local)}, capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                     if result.returncode == 0:
                         raise RuntimeError('AI auto-start ignored manual disconnect')

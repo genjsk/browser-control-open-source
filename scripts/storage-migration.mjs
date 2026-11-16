@@ -19,6 +19,16 @@ async function hash(file) {
   for await (const chunk of fs.createReadStream(file)) digest.update(chunk);
   return digest.digest('hex');
 }
+function isLink(file) {
+  if (fs.lstatSync(file).isSymbolicLink()) return true;
+  // Windows junctions are directories to lstat; resolve.native exposes the redirect.
+  if (process.platform !== 'win32') return false;
+  try {
+    const parent = fs.realpathSync.native(path.dirname(file));
+    const direct = path.join(parent, path.basename(file)).toLowerCase();
+    return fs.realpathSync.native(file).toLowerCase() !== direct;
+  } catch { return false; }
+}
 function inventory(directory) {
   const files = [], directories = [];
   function visit(current, relative = '') {
@@ -27,7 +37,7 @@ function inventory(directory) {
       const name = path.join(relative, entry.name);
       const file = path.join(directory, name);
       const stat = fs.lstatSync(file);
-      if (stat.isSymbolicLink()) fail('数据目录含有目录链接，迁移已取消，原数据保持不变。');
+      if (isLink(file)) fail('数据目录含有目录链接，迁移已取消，原数据保持不变。');
       if (stat.isDirectory()) { directories.push(name); visit(file, name); }
       else if (stat.isFile()) files.push(name);
       else fail('数据目录包含不支持的文件类型，迁移已取消。');
@@ -46,7 +56,8 @@ export async function migrateStorage({ source, target, root = appRoot, env = pro
   if (inside(from, to) || inside(to, from) || inside(from, application) || inside(to, application) || from === path.parse(from).root || to === path.parse(to).root) {
     fail('请选择独立的数据文件夹，不能使用旧目录的上级、子目录或程序目录。');
   }
-  if (fs.lstatSync(original).isSymbolicLink() || (fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink())) fail('迁移目录不能是目录链接，请选择普通文件夹。');
+  if (fs.existsSync(original) && isLink(original)) fail('迁移目录不能是目录链接，请选择普通文件夹。');
+  if (fs.existsSync(destination) && isLink(destination)) fail('迁移目录不能是目录链接，请选择普通文件夹。');
   inventory(original); // Validate every entry before stopping or copying anything.
   if (!fs.existsSync(path.dirname(destination))) fail('请先选择一个已经存在的存储位置。');
   if (fs.existsSync(destination) && (!fs.statSync(destination).isDirectory() || fs.readdirSync(destination).length)) fail('目标目录不是空文件夹，请选择其他位置。不会覆盖已有数据。');

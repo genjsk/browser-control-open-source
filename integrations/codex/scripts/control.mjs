@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 try {
   const pluginRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -18,11 +18,7 @@ try {
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
     console.log(JSON.stringify({ opened: true }));
-  } else if (['start', 'stop', 'restart'].includes(command)) {
-    const result = spawnSync(node, [path.join(root, 'scripts', 'cli.mjs'), command, '--json', '--no-open'], {
-      windowsHide: true, encoding: 'utf8', env: { ...process.env, BROWSER_CONTROL_DATA_DIR: dataDir }
-    });
-    if (result.status !== 0) throw new Error(result.stderr?.trim() || '本地服务操作失败。');
-    process.stdout.write(result.stdout);
-  } else throw new Error('Commands: info, open-panel, start, stop, restart');
+  } else {
+    throw new Error('Commands: info, open-panel。服务和浏览器配对只能由用户在 Browser Control 控制面板中连接、断开或重启。');
+  }
 } catch (error) { console.error(error.message); process.exitCode = 1; }

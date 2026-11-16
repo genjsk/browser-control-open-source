@@ -16,10 +16,12 @@
 - `plugin.json`、`mcp.json`：可移植插件格式，声明本地执行和 stdio MCP。
 - `.codex-plugin/plugin.json`、`.mcp.json`：兼容客户端的插件入口。
 - `skills/browser-control/SKILL.md`：授权网页、连接与手动断开、读取与操作验证指引。
-- `scripts/control.mjs`：按用户请求打开原 exe 或连接、断开本地服务的辅助入口。
+- `scripts/control.mjs`：查看本机运行位置或打开原控制面板的辅助入口；不启动、停止服务。
 - 头像资源与本机运行位置记录。
 
 插件提供原有的 11 个浏览器工具，使用 `browser_control_native` 服务器名称。插件包不复制 exe 或生产依赖，不携带配对密钥；它使用当前数据目录中的固定 Node.js 和 MCP 启动器。完整 exe 和服务文件仍需保留。
+
+插件只连接控制面板已经启动的本地服务，不会自行启动服务或创建监听端口。每次调用都会由本地服务核对 `codex-native` 实例身份、插件端口、配对凭据、扩展连接和暂停状态；失败时返回准确原因。可在面板“AI 接入情况”单独暂停或恢复 Codex 接入，暂停由服务端强制执行并持久保存。
 
 安装程序仅移除旧版中由本项目标记管理的 `browser_control` MCP 小节，避免重复注册；修改前在数据目录中备份。其他 MCP、插件和客户端设置会保留，未标记为本项目管理的手动配置不会被移除。
 
@@ -38,6 +40,6 @@ node scripts/cli.mjs prepare-codex-plugin --json
 node scripts/cli.mjs install-codex-plugin --json
 ```
 
-安装、启用插件不解除用户的手动断开状态，不会自动授权网页。原有通用 MCP JSON 和 DSH 插件仍可使用。
+安装、启用插件不解除用户的手动断开状态，不会自动授权网页，也不会启动本地服务。原有通用 MCP JSON 和 DSH 插件仍可使用。
 
 格式参考：[OpenAI 插件打包规范](https://developers.openai.com/plugins/build/plugins)、[本地 MCP 插件](https://developers.openai.com/plugins/deploy/desktop-only)。本项目使用本地插件市场，不代表已发布到公共插件目录。

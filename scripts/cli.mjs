@@ -13,6 +13,7 @@ catch (error) { console.error(JSON.stringify({ error: error.message, code: error
 const { api, localDir, port, root, writeJson } = await import('../bridge/config.mjs');
 const { ensureDaemon, stopDaemon } = await import('../bridge/client.mjs');
 const { integrationInfo, installCodex, prepareDsh, registerRuntime } = await import('./integration.mjs');
+const { listInstances, setInstancePaused } = await import('../bridge/instances.mjs');
 
 const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
 function openFile(file) {
@@ -46,8 +47,14 @@ try {
     output = { running: false, message: stopped ? '已断开；需要使用时点击“连接”。' : '服务已断开。' };
   } else if (command === 'status') {
     try { output = { running: true, ...await api('/status', undefined, 1500) }; }
-    catch (error) { if (error.cause?.code === 'ECONNREFUSED') output = { running: false }; else throw error; }
+    catch (error) { if (error.cause?.code === 'ECONNREFUSED' || error.code === 'SERVICE_NOT_RUNNING') output = { running: false }; else throw error; }
   } else if (command === 'info') output = await integrationInfo();
+  else if (command === 'ai-instances') output = { servicePort: port, instances: await listInstances() };
+  else if (command === 'ai-instance-pause' || command === 'ai-instance-resume') {
+    const id = process.argv[3];
+    const paused = command === 'ai-instance-pause';
+    output = { instance: await setInstancePaused(id, paused), message: paused ? '已暂停该 AI 接入实例的调用。' : '已恢复该 AI 接入实例的调用。' };
+  }
   else if (command === 'integrate-codex') output = await installCodex();
   else if (command === 'prepare-dsh') output = await prepareDsh();
   else if (command === 'prepare-codex-plugin') output = await (await import('./codex-plugin.mjs')).prepareCodexPlugin();
@@ -74,7 +81,7 @@ try {
     try { settings = JSON.parse(await readFile(path.join(localDir, 'settings.json'), 'utf8')); } catch {}
     await writeJson(path.join(localDir, 'settings.json'), { ...settings, port: nextPort });
     output = { port: nextPort, message: '端口已更新，请重新连接、重新配对浏览器，并重启 AI 客户端以加载新设置。' };
-  } else throw new Error('Commands: setup, start, stop, restart, status, info, integrate-codex, prepare-dsh, prepare-codex-plugin, install-codex-plugin, set-port <number>, migrate-storage <directory>');
+  } else throw new Error('Commands: setup, start, stop, restart, status, info, ai-instances, ai-instance-pause <id>, ai-instance-resume <id>, integrate-codex, prepare-dsh, prepare-codex-plugin, install-codex-plugin, set-port <number>, migrate-storage <directory>');
   console.log(json ? JSON.stringify(output) : (output.message || JSON.stringify(output, null, 2)));
 } catch (error) {
   console.error(json ? JSON.stringify({ error: error.message }) : error.message);

@@ -19,7 +19,7 @@
 
 启动时自动使用本机默认数据目录，不弹出目录选择窗口。Windows 默认 `%LOCALAPPDATA%/BrowserControl`，macOS 默认 `~/Library/Application Support/BrowserControl`，Linux 默认 `${XDG_STATE_HOME:-~/.local/state}/browser-control`。C 盘与其他可写磁盘均可使用。默认位置不可写时，使用程序内 `.local/state` 并在界面显示，可从设置更改。
 
-当前数据目录内包括 `settings.json`、每端口配对密钥、断开标记、日志、固定 MCP 启动器、本地 Node.js 副本、客户端配置备份和按需生成的 DSH 插件。它们都是运行时数据，未纳入源码或发布包。自定义位置记录在程序旁 `.local/storage-location.json`，迁移到其他电脑后使用该电脑的默认位置。
+当前数据目录内包括 `settings.json`、每端口配对密钥、AI 接入实例记录与身份令牌（`ai-instances.json`、`ai-token-*.json`、`identity-*.json`，权限 0600）、断开标记、日志、固定 MCP 启动器、本地 Node.js 副本、客户端配置备份和按需生成的 DSH 插件。它们都是运行时数据，未纳入源码或发布包。自定义位置记录在程序旁 `.local/storage-location.json`，迁移到其他电脑后使用该电脑的默认位置。
 
 面板“设置 → 更改存储位置”会迁移旧数据：先断开使用旧目录的服务，复制缓存、日志、密钥和设置，逐文件校验后保存新位置，再清理旧文件。浏览器配对和端口保留；生成的 DSH 插件会更新内部路径。AI 客户端原配置中的绝对路径需要从“接入 AI”重新导入，随后重启客户端。
 

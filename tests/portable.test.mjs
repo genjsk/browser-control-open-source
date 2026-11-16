@@ -71,6 +71,8 @@ test('stable MCP entry survives moving the application to a Unicode/space path',
   const after = JSON.parse(response.stdout);
   assert.deepEqual(after.mcp, info.mcp);
   assert.equal(JSON.parse(await readFile(path.join(localDir, 'runtime.json'), 'utf8')).root.replace(/[\\/]$/, ''), moved);
+  // The panel owns the service lifecycle; start it explicitly for this client.
+  assert.equal((await ensureDaemon({ explicit: true })).version, version);
   const transport = new StdioClientTransport({ ...after.mcp.mcpServers.browser_control, env: { ...process.env } });
   const client = new Client({ name: 'relocation-test', version: '1' });
   try {

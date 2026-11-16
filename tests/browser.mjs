@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { root, localDir } from '../bridge/config.mjs';
+import { ensureDaemon } from '../bridge/client.mjs';
 
 // Use Playwright's standard browser cache or PLAYWRIGHT_BROWSERS_PATH override.
 const { chromium } = await import('playwright');
@@ -22,6 +23,8 @@ const results = [];
 let context, transport, client;
 async function step(name, action) { await action(); results.push(name); console.log(`PASS ${name}`); }
 try {
+  // 相当于用户在控制面板点击“连接”：测试先显式启动服务，MCP 客户端自己绝不启动。
+  await ensureDaemon({ explicit: true });
   transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'bridge', 'mcp.mjs')], env: { ...process.env, BROWSER_BRIDGE_PORT: testPort }, stderr: 'pipe' });
   client = new Client({ name: 'browser-integration-test', version: '1.0.0' });
   await client.connect(transport);
@@ -158,11 +161,17 @@ try {
     await mkdir(path.join(root, 'test-results'), { recursive: true });
     await writeFile(path.join(root, 'test-results', '工具截图.jpg'), Buffer.from(image.content[0].data, 'base64'));
   });
-  await step('断线后暂停，重连不自动继续任务', async () => {
+  await step('断线后暂停，MCP 不会自动启动服务，重连后仍需手动恢复', async () => {
     await fetch(`http://127.0.0.1:${testPort}/shutdown`, { method: 'POST', headers: { Authorization: `Bearer ${adminToken}` } });
     await new Promise(resolve => setTimeout(resolve, 800));
     const ui = await send({ type: 'ui_status' }); assert.equal(ui.paused, true);
-    await tool('browser_status');
+    const refused = await client.callTool({ name: 'browser_status', arguments: {} });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /本地服务未启动|控制面板/);
+    assert.doesNotMatch(refused.content[0].text, /端口已被其他版本或程序使用/);
+    await assert.rejects(fetch(`http://127.0.0.1:${testPort}/status`), /fetch failed/);
+    // 相当于用户在控制面板再次点击“连接”，服务由面板管理，而不是 MCP 插件。
+    await ensureDaemon({ explicit: true });
     for (let i = 0; i < 40; i++) { if ((await tool('browser_status')).connected) break; await new Promise(resolve => setTimeout(resolve, 200)); }
     const status = await tool('browser_status'); assert.equal(status.connected, true); assert.equal(status.paused, true);
   });

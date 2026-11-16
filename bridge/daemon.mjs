@@ -2,9 +2,13 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { credentials, safeEqual, port, version, assertConnectionEnabled } from './config.mjs';
+import {
+  ensureIdentity, verifyInstance, listInstances, markSeen, setInstancePaused, getInstance, verification
+} from './instances.mjs';
 
 export async function startDaemon({ listenPort = port, keys = null } = {}) {
   keys ||= await credentials();
+  await ensureIdentity();
   let peer = null;
   let controlEpoch = 0;
   let status = { connected: false, paused: true, browserId: null, authorizedTabs: [] };
@@ -15,40 +19,117 @@ export async function startDaemon({ listenPort = port, keys = null } = {}) {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     const send = (code, value) => { response.writeHead(code); response.end(JSON.stringify(value)); };
-    // No browser-page origins or CORS. Native MCP requests send a bearer token.
-    if (request.headers.host !== `127.0.0.1:${server.address().port}` || request.headers.origin ||
-        !safeEqual(request.headers.authorization, `Bearer ${keys.adminToken}`)) return send(403, { error: 'FORBIDDEN' });
-    try {
-      if (request.url === '/status' && request.method === 'GET') return send(200, { ...status, version });
-      if (request.url === '/shutdown' && request.method === 'POST') {
-        send(200, { stopped: true }); setTimeout(() => close(), 50); return;
-      }
-      if (request.url !== '/command' || request.method !== 'POST') return send(404, { error: 'NOT_FOUND' });
+    const servicePort = server.address().port;
+    // No browser-page origins or CORS. Requests must target this exact loopback
+    // host; the panel uses the admin token, AI instances use their own token.
+    if (request.headers.host !== `127.0.0.1:${servicePort}` || request.headers.origin) return send(403, { error: 'FORBIDDEN' });
+    const isAdmin = safeEqual(request.headers.authorization, `Bearer ${keys.adminToken}`);
+    const instanceId = String(request.headers['x-browser-control-instance'] || '');
+    const instanceToken = String(request.headers['x-browser-control-instance-token'] || '');
+    const rawHeaderPort = request.headers['x-browser-control-port'];
+    const headerPort = rawHeaderPort === undefined ? null : Number(rawHeaderPort);
+    const sendAuthError = ({ code, message, configuredPort }) => send(403, {
+      error: message, code, message,
+      configuredPort: configuredPort ?? null,
+      servicePort,
+      verification: { configuredPort: configuredPort ?? null, servicePort, portMatches: false, pairing: 'failed' }
+    });
+    const authenticate = async () => {
+      const auth = await verifyInstance({
+        id: instanceId, token: instanceToken,
+        headerPort: Number.isInteger(headerPort) && headerPort > 0 ? headerPort : null,
+        servicePort
+      });
+      if (auth.error) { sendAuthError(auth.error); return null; }
+      return auth.entry;
+    };
+    async function readBody(limit = 128 * 1024) {
       let body = '';
       for await (const chunk of request) {
         body += chunk;
-        if (Buffer.byteLength(body) > 128 * 1024) return send(413, { error: 'REQUEST_TOO_LARGE' });
+        if (Buffer.byteLength(body) > limit) throw Object.assign(new Error('REQUEST_TOO_LARGE'), { status: 413 });
       }
+      return body;
+    }
+    try {
+      if (request.url === '/status' && request.method === 'GET') {
+        if (isAdmin) return send(200, { ...status, version, servicePort, instances: await listInstances() });
+        const entry = await authenticate(); if (!entry) return;
+        await markSeen(entry.id, { call: true }).catch(() => {});
+        return send(200, { ...status, version, servicePort, verification: verification(entry, servicePort, status.connected) });
+      }
+      if (request.url === '/instance/heartbeat' && request.method === 'POST') {
+        const entry = await authenticate(); if (!entry) return;
+        await markSeen(entry.id).catch(() => {});
+        return send(200, { ok: true, servicePort, verification: verification(entry, servicePort, status.connected) });
+      }
+      if (isAdmin && request.url === '/shutdown' && request.method === 'POST') {
+        send(200, { stopped: true }); setTimeout(() => close(), 50); return;
+      }
+      if (isAdmin && request.url === '/instances' && request.method === 'GET') {
+        return send(200, { version, servicePort, instances: await listInstances() });
+      }
+      if (isAdmin && request.url === '/instances/pause' && request.method === 'POST') {
+        const body = JSON.parse(await readBody(16 * 1024) || '{}');
+        if (typeof body.id !== 'string' || typeof body.paused !== 'boolean') return send(400, { error: 'INVALID_REQUEST', code: 'INVALID_REQUEST' });
+        try {
+          const instance = await setInstancePaused(body.id, body.paused);
+          return send(200, { instance, servicePort, version });
+        } catch (error) {
+          if (error.code === 'INSTANCE_UNKNOWN') return send(404, { error: error.message, code: error.code });
+          throw error;
+        }
+      }
+      if (isAdmin && request.url === '/command') {
+        return send(403, { error: 'AI 工具调用必须使用对应 AI 接入实例的身份。', code: 'INSTANCE_REQUIRED', configuredPort: null, servicePort });
+      }
+      if (request.url !== '/command' || request.method !== 'POST') {
+        return send(404, { error: 'NOT_FOUND', code: 'NOT_FOUND' });
+      }
+      const entry = await authenticate(); if (!entry) return;
+      if (entry.paused) return send(403, {
+        error: `AI 接入实例“${entry.name}”已暂停调用，请在控制面板恢复后再试。`,
+        code: 'INSTANCE_PAUSED', message: `AI 接入实例“${entry.name}”已暂停调用，请在控制面板恢复后再试。`,
+        configuredPort: entry.port, servicePort
+      });
+      const body = await readBody();
       const command = JSON.parse(body);
-      if (typeof command.action !== 'string' || !command.args || typeof command.args !== 'object') return send(400, { error: 'INVALID_COMMAND' });
+      if (typeof command.action !== 'string' || !command.args || typeof command.args !== 'object') return send(400, { error: 'INVALID_COMMAND', code: 'INVALID_COMMAND' });
       const allowed = ['tabs', 'snapshot', 'click', 'fill', 'press_key', 'scroll', 'navigate', 'select_tab', 'screenshot', 'wait'];
-      if (!allowed.includes(command.action)) return send(400, { error: 'UNKNOWN_ACTION' });
-      if (command.action !== 'tabs' && (!Number.isInteger(command.args.tabId) || command.args.browserId !== status.browserId)) return send(400, { error: 'INVALID_TARGET' });
+      if (!allowed.includes(command.action)) return send(400, { error: 'UNKNOWN_ACTION', code: 'UNKNOWN_ACTION' });
+      if (command.action !== 'tabs' && (!Number.isInteger(command.args.tabId) || command.args.browserId !== status.browserId)) return send(400, { error: 'INVALID_TARGET', code: 'INVALID_TARGET' });
+      if (!peer) return send(409, {
+        error: '浏览器扩展未连接或连接已断开。请打开浏览器并确认扩展已连接到控制面板服务。',
+        code: 'EXTENSION_DISCONNECTED', message: '浏览器扩展未连接或连接已断开。请打开浏览器并确认扩展已连接到控制面板服务。',
+        configuredPort: entry.port, servicePort
+      });
+      await markSeen(entry.id, { call: true }).catch(() => {});
       const key = `${command.args.browserId}:${command.args.tabId ?? 'tabs'}`;
       const expectedPeer = peer;
       const expectedBrowser = status.browserId;
       const expectedEpoch = controlEpoch;
-      if (!expectedPeer) return send(409, { error: 'BROWSER_DISCONNECTED' });
       const prior = queues.get(key) || Promise.resolve();
-      const work = prior.catch(() => {}).then(() => {
-        if (peer !== expectedPeer || status.browserId !== expectedBrowser) throw new Error('CONNECTION_CHANGED');
-        if (command.action !== 'tabs' && controlEpoch !== expectedEpoch) throw new Error('CONTROL_CHANGED: queued action cancelled; inspect current state before continuing.');
+      const work = prior.catch(() => {}).then(async () => {
+        if (peer !== expectedPeer || status.browserId !== expectedBrowser) throw Object.assign(new Error('CONNECTION_CHANGED'), { status: 409, code: 'CONNECTION_CHANGED' });
+        const current = await getInstance(entry.id);
+        if (!current) throw Object.assign(new Error('未登记的 AI 接入实例。请在控制面板中重新生成该 AI 接入配置。'), { status: 403, code: 'INSTANCE_UNKNOWN' });
+        if (current.paused) throw Object.assign(new Error(`AI 接入实例“${current.name}”已暂停调用，请在控制面板恢复后再试。`), { status: 403, code: 'INSTANCE_PAUSED' });
+        if (command.action !== 'tabs' && controlEpoch !== expectedEpoch) throw Object.assign(new Error('CONTROL_CHANGED: queued action cancelled; inspect current state before continuing.'), { status: 409, code: 'CONTROL_CHANGED' });
         return dispatch(command, expectedPeer);
       });
       queues.set(key, work);
-      try { send(200, await work); }
-      finally { if (queues.get(key) === work) queues.delete(key); }
-    } catch (error) { send(error instanceof SyntaxError ? 400 : 409, { error: error.message }); }
+      try {
+        const result = await work;
+        send(200, { result, verification: verification(entry, servicePort, status.connected) });
+      } finally { if (queues.get(key) === work) queues.delete(key); }
+    } catch (error) {
+      const statusCode = error.status || (error instanceof SyntaxError ? 400 : 409);
+      send(statusCode, {
+        error: error.message, ...(error.code ? { code: error.code } : {}),
+        ...(error.configuredPort !== undefined ? { configuredPort: error.configuredPort } : {}),
+        ...(error.servicePort !== undefined ? { servicePort: error.servicePort } : {})
+      });
+    }
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 12 * 1024 * 1024 });
   server.on('upgrade', (request, socket, head) => {

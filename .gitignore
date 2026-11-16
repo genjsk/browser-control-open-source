@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache/
 .local/
 dist/
 release/
@@ -14,6 +15,10 @@ __pycache__/
 .env.*
 !.env.example
 credentials*.json
+ai-instances.json
+ai-token-*.json
+identity-*.json
+disabled-*
 connection.json
 local-runtime.json
 mcp-config.json
