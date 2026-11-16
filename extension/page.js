@@ -59,11 +59,13 @@
         const elementId = `e${elements.size + 1}`;
         const text = label(node);
         elements.set(elementId, { node, label: text });
-        interactive.push({ elementId, tag: node.tagName.toLowerCase(), role: node.getAttribute('role'), label: text,
+        interactive.push({
+          elementId, tag: node.tagName.toLowerCase(), role: node.getAttribute('role'), label: text,
           type: node.getAttribute('type'), disabled: !!node.disabled, checked: node.matches('input[type="checkbox"],input[type="radio"]') ? node.checked : undefined,
           value: node.matches('input,textarea,select') ? String(node.value).slice(0, 500) : undefined,
-          options: node.tagName === 'SELECT' ? [...node.options].slice(0, 80).map(option => ({ value: option.value, label: option.label })) : undefined });
-        if (interactive.length >= 250) break;
+          options: node.tagName === 'SELECT' ? [...node.options].slice(0, 80).map(option => ({ value: option.value, label: option.label })) : undefined
+        });
+        // if (interactive.length >= 250) break;
       }
       return { snapshotId, title: document.title, url: location.href, text: bodyText(args.maxText || 8000), elements: interactive, contentTrust: 'untrusted-page-data' };
     }
