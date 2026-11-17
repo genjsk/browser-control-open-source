@@ -132,6 +132,18 @@ try {
     assert.ok(!JSON.stringify(result).includes('世界'));
     assert.ok(!JSON.stringify(await send({ type: 'ui_status' })).includes('世界'));
   });
+  await step('页面脚本执行需单独同意并返回结果', async () => {
+    await page.bringToFront();
+    await tool('browser_select_tab', target);
+    await assert.rejects(tool('browser_eval', { ...target, expression: 'document.title' }), /EVAL_CONSENT_REQUIRED/);
+    await options.locator('#eval-consent').check();
+    await options.locator('#eval-note').filter({ hasText: '页面脚本执行已启用' }).waitFor();
+    const result = await tool('browser_eval', { ...target, expression: '({title: document.title, value: 6 * 7})' });
+    assert.equal(result.evaluated, true);
+    assert.match(result.result.title, /浏览器控制验收页面/);
+    assert.equal(result.result.value, 42);
+    await options.locator('#eval-consent').uncheck();
+  });
   await step('逐字输入 textarea：中文、emoji、换行且不提交表单', async () => {
     const area = await locate('逐字文本域', 'textarea');
     const result = await tool('browser_type_text', { ...area, text: '第一行\n第二行 😀', delayMs: 1 });

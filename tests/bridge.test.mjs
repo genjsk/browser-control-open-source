@@ -150,6 +150,26 @@ test('type_text 在允许列表内，完整参数与结果经桥接返回', asyn
   assert.equal(body.verification.portMatches, true);
 });
 
+test('eval 在允许列表内，expression 与结果经桥接返回', async t => {
+  const f = await fixture(t);
+  const ws = await f.ready();
+  let received = null;
+  ws.on('message', raw => {
+    const message = JSON.parse(raw);
+    if (message.type !== 'command') return;
+    received = message;
+    ws.send(JSON.stringify({ type: 'result', requestId: message.requestId, result: { evaluated: true, result: 42 } }));
+  });
+  const response = await f.command('eval', { browserId: 'test-browser', tabId: 10, frameId: 0, expression: '6*7' });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(received.action, 'eval');
+  assert.equal(received.args.expression, '6*7');
+  assert.equal(body.result.evaluated, true);
+  assert.equal(body.result.result, 42);
+  assert.equal(body.verification.portMatches, true);
+});
+
 test('暂停时拒绝动作并拒绝错误浏览器目标', async t => {
   const f = await fixture(t);
   const ws = await f.ready();

@@ -15,6 +15,16 @@ $('form').addEventListener('submit', async event => {
 $('disconnect').addEventListener('click', async () => {
   await send({ type: 'disconnect' }); $('message').textContent = '已断开并撤销授权。';
 });
+$('eval-consent').addEventListener('change', async () => {
+  const enabled = $('eval-consent').checked;
+  try {
+    await send({ type: 'eval_consent', enabled });
+    $('eval-note').textContent = enabled ? '页面脚本执行已启用；每次执行结束都会断开调试会话。' : '未启用页面脚本执行；browser_eval 会被拒绝。';
+  } catch (error) {
+    $('eval-consent').checked = !enabled;
+    $('eval-note').textContent = error.message;
+  }
+});
 $('typing-consent').addEventListener('change', async () => {
   const enabled = $('typing-consent').checked;
   try {
@@ -33,5 +43,9 @@ async function refresh() {
   $('typing-note').textContent = !state.debuggerPermission
     ? '扩展缺少 debugger 权限，请重新加载扩展。'
     : state.typingConsent ? '逐字输入已启用。' : '未启用逐字输入；browser_type_text 会被拒绝。';
+  $('eval-consent').checked = !!state.evalConsent;
+  $('eval-note').textContent = !state.debuggerPermission
+    ? '扩展缺少 debugger 权限，请重新加载扩展。'
+    : state.evalConsent ? '页面脚本执行已启用。' : '未启用页面脚本执行；browser_eval 会被拒绝。';
 }
 void refresh(); setInterval(() => { void refresh(); }, 2000);

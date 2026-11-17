@@ -10,5 +10,9 @@
 <p class="muted">逐字输入通过 Chrome 的调试接口向已授权的标签页发送浏览器级键盘和文本输入，页面会收到 <code>isTrusted</code> 的 keydown、keypress 与 input 事件。启用后 Chrome 会在调试期间显示“正在调试此浏览器”的提示条；扩展更新后可能要求你在 <code>chrome://extensions</code> 接受新增的“调试程序”权限。该功能只操作你已授权的页面，不绕过网站保护，也不会自动提交表单。</p>
 <label class="consent" for="typing-consent"><input id="typing-consent" type="checkbox"> 我了解并允许在逐字输入期间使用 Chrome 调试权限</label>
 <p id="typing-note" class="muted"></p>
+<h2>页面脚本执行（高级，可选）</h2>
+<p class="muted">允许 AI 在已授权页面的主环境执行你确认的 JavaScript，用于处理 Monaco、CodeMirror 等禁止直接粘贴的编辑器。脚本可读取页面数据和当前登录状态，只在明确需要时启用；不要用它读取密码、令牌或其他敏感字段。执行结束会立即断开调试会话。</p>
+<label class="consent" for="eval-consent"><input id="eval-consent" type="checkbox"> 我了解并允许在已授权页面执行 JavaScript</label>
+<p id="eval-note" class="muted"></p>
 <p class="muted">连接成功后，切换到要操作的网页，点击扩展图标，再选择“允许 AI 操作当前网页”。跳转到其他网站需要重新授权。网页内容和截图作为工具结果返回时会进入 AI 会话。</p>
 </main><script src="options.js" type="module"></script></body></html>

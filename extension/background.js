@@ -11,7 +11,7 @@ let state = { paused: true, grants: {} };
 let settings = {};
 const completed = new Map();
 const initialized = (async () => {
-  settings = await chrome.storage.local.get(['token', 'port', 'browserId', 'enabled', 'typingConsent']);
+  settings = await chrome.storage.local.get(['token', 'port', 'browserId', 'enabled', 'typingConsent', 'evalConsent']);
   if (!settings.browserId) { settings.browserId = crypto.randomUUID(); await chrome.storage.local.set({ browserId: settings.browserId }); }
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   const stored = await chrome.storage.session.get('control');
@@ -253,6 +253,63 @@ async function typeText(tab, grant, args, deadline) {
   };
 }
 
+async function evaluatePage(tab, args, deadline) {
+  if (!settings.evalConsent) throw typingError('EVAL_CONSENT_REQUIRED', '页面脚本执行需要在扩展设置中明确启用高级调试能力。');
+  if (!await chrome.permissions.contains({ permissions: ['debugger'] })) {
+    throw typingError('DEBUGGER_PERMISSION_REQUIRED', '扩展尚未获得 debugger 权限，请重新加载扩展并在提示中接受新权限。');
+  }
+  const expression = typeof args.expression === 'string' ? args.expression : '';
+  if (!expression.trim()) throw typingError('EXPRESSION_REQUIRED', '页面脚本执行需要非空 expression。');
+  const frameId = args.frameId || 0;
+  const timeoutMs = Math.min(10000, Math.max(1000, Math.round(Number(args.timeoutMs) || 5000)));
+  let attached = false;
+  const contexts = [];
+  const onEvent = (source, method, params) => {
+    if (source.tabId === tab.id && method === 'Runtime.executionContextCreated') contexts.push(params.context);
+  };
+  chrome.debugger.onEvent.addListener(onEvent);
+  try {
+    await attachDebugger(tab.id);
+    attached = true;
+    await chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.enable');
+    await sleep(50);
+    const context = contexts.find(item => String(item.auxData?.frameId) === String(frameId) && item.auxData?.isDefault);
+    const evaluation = await chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', {
+      expression,
+      ...(context ? { contextId: context.id } : {}),
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true,
+      timeout: timeoutMs
+    });
+    if (evaluation.exceptionDetails) {
+      const detail = evaluation.exceptionDetails.exception?.description || evaluation.exceptionDetails.text || '页面脚本执行失败';
+      throw typingError('EVAL_EXCEPTION', String(detail).split('\n')[0].slice(0, 300));
+    }
+    let value = evaluation.result?.value;
+    if (value === undefined && evaluation.result?.unserializableValue) value = evaluation.result.unserializableValue;
+    if (value === undefined && evaluation.result?.description) value = evaluation.result.description;
+    let serialized = null;
+    try { serialized = JSON.stringify(value); } catch {}
+    const truncated = typeof serialized === 'string' && serialized.length > 120000;
+    if (truncated) value = serialized.slice(0, 120000);
+    const current = await chrome.tabs.get(tab.id);
+    return {
+      evaluated: true,
+      frameId,
+      result: value,
+      truncated,
+      url: current.url,
+      next: '脚本已在页面主环境执行；请读取新快照确认页面结果。'
+    };
+  } finally {
+    chrome.debugger.onEvent.removeListener(onEvent);
+    if (attached) {
+      try { await chrome.debugger.detach({ tabId: tab.id }); } catch {}
+    }
+  }
+}
+
 async function execute(message) {
   const { action, args, deadline } = message;
   await initialized;
@@ -268,6 +325,7 @@ async function execute(message) {
   }
   const { tab, grant } = await assertTarget(args, deadline);
   if (action === 'type_text') return typeText(tab, grant, args, deadline);
+  if (action === 'eval') return evaluatePage(tab, args, deadline);
   if (action === 'select_tab') {
     await chrome.tabs.update(tab.id, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });
@@ -321,13 +379,20 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || ![chrome.runtime.getURL('popup.html'), chrome.runtime.getURL('options.html')].includes(sender.url)) return;
   (async () => {
     await initialized;
-    if (message.type === 'ui_status') return { connected, paused: state.paused, grants: state.grants, lastAction, connectionError, browserId: settings.browserId, typingConsent: !!settings.typingConsent, debuggerPermission: await chrome.permissions.contains({ permissions: ['debugger'] }) };
+    if (message.type === 'ui_status') return { connected, paused: state.paused, grants: state.grants, lastAction, connectionError, browserId: settings.browserId, typingConsent: !!settings.typingConsent, evalConsent: !!settings.evalConsent, debuggerPermission: await chrome.permissions.contains({ permissions: ['debugger'] }) };
     if (message.type === 'typing_consent') {
       const enabled = !!message.enabled;
       if (enabled && !await chrome.permissions.contains({ permissions: ['debugger'] })) throw new Error('扩展尚未获得 debugger 权限，请重新加载扩展后再启用逐字输入。');
       settings.typingConsent = enabled;
       await chrome.storage.local.set({ typingConsent: enabled });
       return { typingConsent: enabled };
+    }
+    if (message.type === 'eval_consent') {
+      const enabled = !!message.enabled;
+      if (enabled && !await chrome.permissions.contains({ permissions: ['debugger'] })) throw new Error('扩展尚未获得 debugger 权限，请重新加载扩展后再启用页面脚本执行。');
+      settings.evalConsent = enabled;
+      await chrome.storage.local.set({ evalConsent: enabled });
+      return { evalConsent: enabled };
     }
     if (message.type === 'configure') {
       if (!/^[a-f0-9]{64}$/.test(message.token) || !Number.isInteger(message.port) || message.port < 1024 || message.port > 65535) throw new Error('配对信息格式不正确');

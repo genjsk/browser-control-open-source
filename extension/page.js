@@ -51,6 +51,32 @@
     }
     return output;
   }
+  function editorContent(node) {
+    const cm = node.closest?.('.cm-editor');
+    if (cm) {
+      const content = cm.querySelector('.cm-content[contenteditable="true"]') || cm.querySelector('.cm-content');
+      if (!content || content === node) return null;
+      if (content.getAttribute('contenteditable') === 'false') return null;
+      return { editor: cm, content };
+    }
+    const monaco = node.closest?.('.monaco-editor');
+    if (monaco) {
+      const content = monaco.querySelector('textarea.inputarea') || monaco.querySelector('textarea');
+      if (!content) return null;
+      return { editor: monaco, content, monaco: true };
+    }
+    return null;
+  }
+  function editorValue(editor) {
+    if (editor.classList?.contains('monaco-editor')) {
+      const lines = editor.querySelector('.view-lines');
+      if (lines) return String(lines.innerText ?? '').replace(/\u00a0/g, ' ');
+      const hidden = editor.querySelector('textarea');
+      return hidden && typeof hidden.value === 'string' ? hidden.value : null;
+    }
+    const hidden = editor.querySelector('textarea');
+    return hidden && typeof hidden.value === 'string' ? hidden.value : null;
+  }
   function activeDeep() {
     let active = document.activeElement;
     while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
@@ -118,24 +144,28 @@
     if (action === 'probe') return { ready: document.readyState !== 'loading', found: args.text ? bodyText(200000).includes(args.text) : true, url: location.href };
     if (action === 'scroll') { window.scrollBy({ left: args.x, top: args.y, behavior: 'instant' }); return { x: scrollX, y: scrollY, url: location.href }; }
     if (action === 'type_prepare') {
-      const node = find(args);
-      if (secret(node) || node.closest('[data-private]')) throw new Error('PRIVATE_FIELD');
-      if (node.readOnly || node.getAttribute('aria-readonly') === 'true') throw new Error('FIELD_READONLY');
-      if (node.matches('input') && !['text', 'search', 'email', 'url', 'tel'].includes(node.type)) throw new Error('UNSUPPORTED_INPUT_TYPE');
+      const requested = find(args);
+      if (secret(requested) || requested.closest('[data-private]')) throw new Error('PRIVATE_FIELD');
+      const editor = editorContent(requested);
+      const node = editor ? editor.content : requested;
+      if (!editor && (requested.readOnly || requested.getAttribute('aria-readonly') === 'true')) throw new Error('FIELD_READONLY');
+      if (!editor && requested.matches('input') && !['text', 'search', 'email', 'url', 'tel'].includes(requested.type)) throw new Error('UNSUPPORTED_INPUT_TYPE');
       if (!node.matches('input,textarea') && !node.isContentEditable) throw new Error('ELEMENT_NOT_EDITABLE');
       node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
       const focusedBefore = focusTarget(node);
       node.focus({ preventScroll: true });
-      // If the control was not already focused, start at the end. If the user
-      // already had a caret or selection there, keep it: typing replaces it.
-      if (!focusedBefore) caretToEnd(node);
+      // If the control was not already focused, start at the end. For a
+      // CodeMirror editor the visible content is virtualized, so keep the
+      // editor's own caret instead of guessing an end position.
+      if (!focusedBefore && !editor) caretToEnd(node);
       if (!focusTarget(node)) throw new Error('FOCUS_FAILED');
       const kind = node.matches('input') ? 'input' : node.matches('textarea') ? 'textarea' : 'contenteditable';
       const selection = selectionOffsets(node);
-      const value = textValue(node);
-      typing = { node, elementId: args.elementId, snapshotId, kind, value, start: selection.start, end: selection.end };
+      const editorDoc = editor ? editorValue(editor.editor) : null;
+      const value = editorDoc !== null ? editorDoc : textValue(node);
+      typing = { node, editor: editor?.editor || null, elementId: args.elementId, snapshotId, kind, value, start: editor ? 0 : selection.start, end: editor ? value.length : selection.end };
       return {
-        prepared: true, kind, multiline: kind !== 'input', focusedBefore,
+        prepared: true, kind, multiline: kind !== 'input', focusedBefore, editor: !!editor,
         selectionStart: selection.start, selectionEnd: selection.end, valueLength: value.length
       };
     }
@@ -143,9 +173,10 @@
       if (!typing || typing.snapshotId !== args.snapshotId || typing.elementId !== args.elementId) throw new Error('TYPE_SESSION_MISSING');
       if (!typing.node.isConnected) return { focused: false, gone: true, kind: typing.kind, valueLength: 0, selectionStart: 0, selectionEnd: 0 };
       const selection = selectionOffsets(typing.node);
+      const editorDoc = typing.editor ? editorValue(typing.editor) : null;
       return {
         focused: focusTarget(typing.node), gone: false, kind: typing.kind,
-        valueLength: textValue(typing.node).length, selectionStart: selection.start, selectionEnd: selection.end
+        valueLength: (editorDoc !== null ? editorDoc : textValue(typing.node)).length, selectionStart: selection.start, selectionEnd: selection.end
       };
     }
     if (action === 'type_finish') {
@@ -158,11 +189,13 @@
       if (!session.node.isConnected) return { verified: false, focusHeld: false, valueLength: 0, gone: true };
       const expected = typeof args.expectedText === 'string' ? args.expectedText : '';
       const expectedValue = session.value.slice(0, session.start) + expected + session.value.slice(session.end);
-      const actual = textValue(session.node);
+      const editorDoc = session.editor ? editorValue(session.editor) : null;
+      const actual = editorDoc !== null ? editorDoc : textValue(session.node);
       const selection = selectionOffsets(session.node);
       return {
-        verified: actual === expectedValue, focusHeld: focusTarget(session.node), gone: false,
-        kind: session.kind, valueLength: actual.length,
+        verified: session.editor ? actual.includes(expected) && actual !== session.value : actual === expectedValue,
+        focusHeld: focusTarget(session.node), gone: false,
+        kind: session.kind, editor: !!session.editor, valueLength: actual.length,
         selectionStart: selection.start, selectionEnd: selection.end
       };
     }
