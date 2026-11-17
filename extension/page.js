@@ -6,6 +6,9 @@
   // no longer invalidate a whole snapshot.
   const elements = new Map();
   let snapshotId = null;
+  // Active character-by-character typing session. It holds the node directly
+  // because contenteditable labels change while text is inserted.
+  let typing = null;
   function visible(node) {
     const style = getComputedStyle(node);
     const rect = node.getBoundingClientRect();
@@ -48,9 +51,54 @@
     }
     return output;
   }
+  function activeDeep() {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return active;
+  }
+  function textValue(node) {
+    return node.matches('input,textarea') ? String(node.value) : String(node.innerText ?? '');
+  }
+  function indexIn(node, container, offset) {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    range.setEnd(container, offset);
+    return range.toString().length;
+  }
+  function selectionOffsets(node) {
+    const value = textValue(node);
+    if (node.matches('input,textarea')) {
+      return { start: node.selectionStart ?? value.length, end: node.selectionEnd ?? value.length };
+    }
+    const root = node.getRootNode();
+    const selection = (root.getSelection ? root.getSelection() : document.getSelection());
+    if (!selection || !selection.rangeCount) return { start: value.length, end: value.length };
+    const range = selection.getRangeAt(0);
+    if (!node.contains(range.startContainer) || !node.contains(range.endContainer)) return { start: value.length, end: value.length };
+    return { start: indexIn(node, range.startContainer, range.startOffset), end: indexIn(node, range.endContainer, range.endOffset) };
+  }
+  function focusTarget(node) {
+    const active = activeDeep();
+    return active === node || (node.isContentEditable && node.contains(active));
+  }
+  function caretToEnd(node) {
+    if (node.matches('input,textarea')) {
+      const end = String(node.value).length;
+      try { node.setSelectionRange(end, end); } catch {}
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    range.collapse(false);
+    const root = node.getRootNode();
+    const selection = (root.getSelection ? root.getSelection() : document.getSelection());
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
   globalThis.__gptBrowserPage = async (action, args) => {
     if (action === 'snapshot') {
       elements.clear();
+      typing = null;
       snapshotId = crypto.randomUUID();
       const interactive = [];
       for (const node of deepElements(document)) {
@@ -65,10 +113,59 @@
           options: node.tagName === 'SELECT' ? [...node.options].slice(0, 80).map(option => ({ value: option.value, label: option.label })) : undefined
         });
       }
-      return { snapshotId, title: document.title, url: location.href, text: bodyText(args.maxText || 8000), elements: interactive.slice(0, 5), contentTrust: 'untrusted-page-data' };
+      return { snapshotId, title: document.title, url: location.href, text: bodyText(args.maxText || 8000), elements: interactive, contentTrust: 'untrusted-page-data' };
     }
     if (action === 'probe') return { ready: document.readyState !== 'loading', found: args.text ? bodyText(200000).includes(args.text) : true, url: location.href };
     if (action === 'scroll') { window.scrollBy({ left: args.x, top: args.y, behavior: 'instant' }); return { x: scrollX, y: scrollY, url: location.href }; }
+    if (action === 'type_prepare') {
+      const node = find(args);
+      if (secret(node) || node.closest('[data-private]')) throw new Error('PRIVATE_FIELD');
+      if (node.readOnly || node.getAttribute('aria-readonly') === 'true') throw new Error('FIELD_READONLY');
+      if (node.matches('input') && !['text', 'search', 'email', 'url', 'tel'].includes(node.type)) throw new Error('UNSUPPORTED_INPUT_TYPE');
+      if (!node.matches('input,textarea') && !node.isContentEditable) throw new Error('ELEMENT_NOT_EDITABLE');
+      node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      const focusedBefore = focusTarget(node);
+      node.focus({ preventScroll: true });
+      // If the control was not already focused, start at the end. If the user
+      // already had a caret or selection there, keep it: typing replaces it.
+      if (!focusedBefore) caretToEnd(node);
+      if (!focusTarget(node)) throw new Error('FOCUS_FAILED');
+      const kind = node.matches('input') ? 'input' : node.matches('textarea') ? 'textarea' : 'contenteditable';
+      const selection = selectionOffsets(node);
+      const value = textValue(node);
+      typing = { node, elementId: args.elementId, snapshotId, kind, value, start: selection.start, end: selection.end };
+      return {
+        prepared: true, kind, multiline: kind !== 'input', focusedBefore,
+        selectionStart: selection.start, selectionEnd: selection.end, valueLength: value.length
+      };
+    }
+    if (action === 'type_focus') {
+      if (!typing || typing.snapshotId !== args.snapshotId || typing.elementId !== args.elementId) throw new Error('TYPE_SESSION_MISSING');
+      if (!typing.node.isConnected) return { focused: false, gone: true, kind: typing.kind, valueLength: 0, selectionStart: 0, selectionEnd: 0 };
+      const selection = selectionOffsets(typing.node);
+      return {
+        focused: focusTarget(typing.node), gone: false, kind: typing.kind,
+        valueLength: textValue(typing.node).length, selectionStart: selection.start, selectionEnd: selection.end
+      };
+    }
+    if (action === 'type_finish') {
+      if (!typing || typing.snapshotId !== args.snapshotId || typing.elementId !== args.elementId) {
+        return { verified: false, focusHeld: false, valueLength: 0, gone: true, error: 'TYPE_SESSION_MISSING' };
+      }
+      const session = typing;
+      typing = null;
+      snapshotId = null;
+      if (!session.node.isConnected) return { verified: false, focusHeld: false, valueLength: 0, gone: true };
+      const expected = typeof args.expectedText === 'string' ? args.expectedText : '';
+      const expectedValue = session.value.slice(0, session.start) + expected + session.value.slice(session.end);
+      const actual = textValue(session.node);
+      const selection = selectionOffsets(session.node);
+      return {
+        verified: actual === expectedValue, focusHeld: focusTarget(session.node), gone: false,
+        kind: session.kind, valueLength: actual.length,
+        selectionStart: selection.start, selectionEnd: selection.end
+      };
+    }
     const node = find(args);
     if (secret(node) || node.closest('[data-private]')) throw new Error('PRIVATE_FIELD');
     node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });

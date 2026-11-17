@@ -46,7 +46,7 @@
 
 ## DeepSeek Harness
 
-面板“生成 DSH 插件”在当前用户数据目录生成一个有效的 Cordis bundle，并提供本机安装命令。可以在 DSH 添加本地插件，或运行生成的 `dsh plugin --profile web add ...` 命令。插件通过官方 `@deepseek-ai/dsh-mcp-client` 暴露 11 个工具。
+面板“生成 DSH 插件”在当前用户数据目录生成一个有效的 Cordis bundle，并提供本机安装命令。可以在 DSH 添加本地插件，或运行生成的 `dsh plugin --profile web add ...` 命令。插件通过官方 `@deepseek-ai/dsh-mcp-client` 暴露 12 个工具，其中 `browser_type_text` 需要扩展内的逐字输入同意和 Chrome `debugger` 权限，且目标标签页必须在前台。
 
 生成后点击“复制插件地址”（在“打开插件目录”上方），将文件夹路径直接粘贴到 DSH 添加本地插件的位置即可。
 

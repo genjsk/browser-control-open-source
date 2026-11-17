@@ -46,7 +46,7 @@ test('native MCP exposes all browser tools and honors manual disconnection', asy
   const transport = new StdioClientTransport({ ...config.mcpServers.browser_control_native, env: { ...process.env } });
   try {
     await client.connect(transport);
-    assert.equal((await client.listTools()).tools.length, 11);
+    assert.equal((await client.listTools()).tools.length, 12);
     const result = await client.callTool({ name: 'browser_status', arguments: {} });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /手动断开/);

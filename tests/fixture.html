@@ -5,8 +5,19 @@
 <div data-private>do-not-send-private-note</div><input type="hidden" value="do-not-send-token">
 <label>选项<select id="choice"><option value="a">选项 A</option><option value="b">选项 B</option></select></label>
 <label><input type="checkbox" id="check">同意测试</label><button id="counter">计数</button><span id="count">0</span>
+<section id="typing"><h2>逐字输入</h2><form id="typing-form"><label>逐字文本框<input id="typed" type="text"></label><label>逐字文本域<textarea id="typed-area"></textarea></label><div id="typed-editor" contenteditable="true" aria-label="逐字编辑器"></div><label>逐字文件<input id="typed-file" type="file"></label><button type="submit">提交逐字表单</button></form><span id="typed-submits">0</span></section>
 <div id="shadow"></div><iframe src="/frame"></iframe><div id="spacer"></div><p>页面底部</p>
 <script>
+let typedSubmits = 0;
+window.__typingEvents = [];
+window.__typingKeys = [];
+for (const id of ['typed', 'typed-area', 'typed-editor']) {
+  const field = document.getElementById(id);
+  field.addEventListener('input', event => window.__typingEvents.push({ id, trusted: event.isTrusted, inputType: event.inputType, length: (event.target.value ?? event.target.textContent ?? '').length }));
+  field.addEventListener('keydown', event => window.__typingKeys.push({ id, key: event.key, trusted: event.isTrusted }));
+}
+document.getElementById('typing-form').addEventListener('submit', event => { event.preventDefault(); typedSubmits += 1; document.getElementById('typed-submits').textContent = String(typedSubmits); });
+window.__typedSubmits = () => typedSubmits;
 document.querySelector('#search').addEventListener('submit',event=>{event.preventDefault();document.querySelector('#result').textContent='搜索结果：'+document.querySelector('#query').value});
 document.querySelector('#counter').onclick=()=>{document.querySelector('#count').textContent=Number(document.querySelector('#count').textContent)+1};
 document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button id="shadow-button">Shadow 按钮</button>';

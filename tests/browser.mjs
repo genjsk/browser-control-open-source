@@ -110,6 +110,128 @@ try {
     await tool('browser_click', await locate('框架按钮'));
     assert.equal(await page.locator('#choice').inputValue(), 'b'); assert.equal(await page.locator('#check').isChecked(), true);
   });
+  await step('逐字输入：未启用权限时明确拒绝，启用后逐字输入并核验', async () => {
+    await page.bringToFront();
+    await tool('browser_select_tab', target);
+    const input = await locate('逐字文本框', 'input');
+    await assert.rejects(tool('browser_type_text', { ...input, text: 'Hello 世界\n!' }), /TYPING_CONSENT_REQUIRED/);
+    await options.locator('#typing-consent').check();
+    await options.locator('#typing-note').filter({ hasText: '逐字输入已启用' }).waitFor();
+    const result = await tool('browser_type_text', { ...input, text: 'Hello 世界\n!' });
+    assert.equal(result.complete, true, JSON.stringify(result));
+    assert.equal(result.verified, true);
+    assert.equal(result.characters, 10);
+    assert.equal(result.typedCharacters, 9);
+    assert.equal(result.skippedCharacters, 1);
+    assert.equal(result.focusHeld, true);
+    assert.equal(await page.locator('#typed').inputValue(), 'Hello 世界!');
+    const events = await page.evaluate(() => window.__typingEvents.filter(event => event.id === 'typed'));
+    assert.ok(events.length > 0);
+    assert.ok(events.every(event => event.trusted));
+    assert.ok(events.every(event => event.inputType));
+    assert.ok(!JSON.stringify(result).includes('世界'));
+    assert.ok(!JSON.stringify(await send({ type: 'ui_status' })).includes('世界'));
+  });
+  await step('逐字输入 textarea：中文、emoji、换行且不提交表单', async () => {
+    const area = await locate('逐字文本域', 'textarea');
+    const result = await tool('browser_type_text', { ...area, text: '第一行\n第二行 😀', delayMs: 1 });
+    assert.equal(result.complete, true);
+    assert.equal(result.verified, true);
+    assert.equal(result.characters, 9);
+    assert.equal(await page.locator('#typed-area').inputValue(), '第一行\n第二行 😀');
+    assert.equal(await page.evaluate(() => window.__typedSubmits()), 0);
+    const events = await page.evaluate(() => window.__typingEvents.filter(event => event.id === 'typed-area'));
+    assert.ok(events.length > 0 && events.every(event => event.trusted));
+  });
+  await step('逐字输入 contenteditable：中文、emoji 和换行', async () => {
+    const editor = await locate('逐字编辑器', 'div');
+    const result = await tool('browser_type_text', { ...editor, text: '编辑器：中文 😀\n换行' });
+    assert.equal(result.complete, true);
+    assert.equal(result.verified, true);
+    assert.equal(await page.locator('#typed-editor').innerText(), '编辑器：中文 😀\n换行');
+    assert.equal(await page.evaluate(() => window.__typedSubmits()), 0);
+  });
+  await step('逐字输入保留光标与选区语义', async () => {
+    await page.evaluate(() => {
+      const input = document.querySelector('#typed');
+      input.value = 'prefix-suffix';
+      input.focus();
+      input.setSelectionRange(7, 13);
+    });
+    const input = await locate('逐字文本框', 'input');
+    const replaced = await tool('browser_type_text', { ...input, text: 'X' });
+    assert.equal(replaced.verified, true, JSON.stringify(replaced));
+    assert.equal(await page.locator('#typed').inputValue(), 'prefix-X');
+    await page.evaluate(() => {
+      const input = document.querySelector('#typed');
+      input.value = 'append';
+      document.querySelector('#query').focus();
+    });
+    const unfocused = await locate('逐字文本框', 'input');
+    const appended = await tool('browser_type_text', { ...unfocused, text: '!' });
+    assert.equal(appended.verified, true, JSON.stringify(appended));
+    assert.equal(await page.locator('#typed').inputValue(), 'append!');
+  });
+  await step('密码和文件输入仍被拒绝逐字输入', async () => {
+    const input = await locate('逐字文本框', 'input');
+    await page.evaluate(() => { document.querySelector('#typed').type = 'password'; });
+    await assert.rejects(tool('browser_type_text', { ...input, text: 'secret' }), /PRIVATE_FIELD/);
+    await page.evaluate(() => { document.querySelector('#typed').type = 'file'; });
+    await assert.rejects(tool('browser_type_text', { ...input, text: 'secret' }), /PRIVATE_FIELD/);
+    await page.evaluate(() => { document.querySelector('#typed').type = 'text'; });
+  });
+  await step('暂停时逐字输入安全停止并报告部分结果，不自动重放', async () => {
+    await page.bringToFront();
+    await tool('browser_select_tab', target);
+    const input = await locate('逐字文本框', 'input');
+    await page.evaluate(() => { document.querySelector('#typed').value = ''; });
+    const pending = tool('browser_type_text', { ...input, text: 'abcdefghijklmnopqrstuvwxyz', delayMs: 60 });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await send({ type: 'pause' });
+    const partial = await pending;
+    assert.equal(partial.complete, false);
+    assert.match(partial.stopReason.code, /USER_PAUSED/);
+    assert.ok(partial.typedCharacters > 0 && partial.typedCharacters < partial.characters);
+    const length = (await page.locator('#typed').inputValue()).length;
+    assert.equal(length, partial.typedCharacters);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    assert.equal((await page.locator('#typed').inputValue()).length, length);
+    await send({ type: 'resume' });
+  });
+  await step('焦点离开目标控件时停止并报告部分结果', async () => {
+    await page.bringToFront();
+    await tool('browser_select_tab', target);
+    const input = await locate('逐字文本框', 'input');
+    await page.evaluate(() => { document.querySelector('#typed').value = ''; });
+    const pending = tool('browser_type_text', { ...input, text: '0123456789abcdefghij', delayMs: 60 });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await page.evaluate(() => document.querySelector('#query').focus());
+    const partial = await pending;
+    assert.equal(partial.complete, false);
+    assert.match(partial.stopReason.code, /FOCUS_LOST|FOCUS_CHECK_FAILED/);
+    assert.ok(partial.typedCharacters < partial.characters);
+  });
+  await step('标签页切到后台时安全停止逐字输入', async () => {
+    const input = await locate('逐字文本框', 'input');
+    await page.evaluate(() => { document.querySelector('#typed').value = ''; });
+    await tool('browser_select_tab', target);
+    const pending = tool('browser_type_text', { ...input, text: 'abcdefghijklmnopqrstuvwxyz', delayMs: 60 });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await options.bringToFront();
+    const partial = await pending;
+    assert.equal(partial.complete, false);
+    assert.match(partial.stopReason.code, /TAB_CHANGED|TAB_NOT_ACTIVE/);
+    assert.ok(partial.typedCharacters < partial.characters);
+    await page.bringToFront();
+    await tool('browser_select_tab', target);
+  });
+  await step('逐字输入结束后释放 Chrome 调试连接', async () => {
+    const stillAttached = await options.evaluate(async tabId => {
+      try { await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', { expression: '1' }); return true; }
+      catch { return false; }
+    }, tab.id);
+    assert.equal(stillAttached, false);
+  });
   await step('合成 Enter 可提交普通表单', async () => {
     await tool('browser_fill', { ...await locate('搜索关键词', 'input'), text: 'Enter 验收' });
     await tool('browser_press_key', { ...await locate('搜索关键词', 'input'), key: 'Enter' });

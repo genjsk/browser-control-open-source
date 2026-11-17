@@ -5,11 +5,14 @@ main { width: min(100%, 620px); margin: 32px auto; padding: 28px; background: wh
 body.popup { width: 360px; }
 .popup main { margin: 0; border: 0; border-radius: 0; padding: 20px; }
 h1 { font-size: 22px; line-height: 1.4; margin: 0 0 8px; }
+h2 { font-size: 16px; line-height: 1.4; margin: 24px 0 4px; }
 p { margin: 8px 0 16px; }
 .muted { color: #64748b; font-size: 12px; }
 .status { padding: 12px; border-radius: 10px; background: #f1f5f9; margin: 14px 0; overflow-wrap: anywhere; }
 .status.connected { background: #ecfdf5; color: #065f46; }
 label { display: block; margin: 16px 0 6px; font-weight: 600; }
+label.consent { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; }
+label.consent input { width: auto; margin-top: 3px; }
 input { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
 button { padding: 10px 14px; border: 0; border-radius: 8px; background: #0f766e; color: white; font: inherit; cursor: pointer; }
 button.secondary { background: #e2e8f0; color: #334155; }

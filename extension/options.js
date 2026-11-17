@@ -15,9 +15,23 @@ $('form').addEventListener('submit', async event => {
 $('disconnect').addEventListener('click', async () => {
   await send({ type: 'disconnect' }); $('message').textContent = '已断开并撤销授权。';
 });
+$('typing-consent').addEventListener('change', async () => {
+  const enabled = $('typing-consent').checked;
+  try {
+    await send({ type: 'typing_consent', enabled });
+    $('typing-note').textContent = enabled ? '逐字输入已启用；Chrome 调试期间会显示提示条。' : '未启用逐字输入；browser_type_text 会被拒绝。';
+  } catch (error) {
+    $('typing-consent').checked = !enabled;
+    $('typing-note').textContent = error.message;
+  }
+});
 async function refresh() {
   const state = await send({ type: 'ui_status' });
   $('status').textContent = state.connected ? '已连接本地服务' : `尚未连接：${state.connectionError || '请填写配对信息'}`;
   $('status').classList.toggle('connected', state.connected);
+  $('typing-consent').checked = !!state.typingConsent;
+  $('typing-note').textContent = !state.debuggerPermission
+    ? '扩展缺少 debugger 权限，请重新加载扩展。'
+    : state.typingConsent ? '逐字输入已启用。' : '未启用逐字输入；browser_type_text 会被拒绝。';
 }
 void refresh(); setInterval(() => { void refresh(); }, 2000);

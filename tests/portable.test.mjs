@@ -77,7 +77,7 @@ test('stable MCP entry survives moving the application to a Unicode/space path',
   const client = new Client({ name: 'relocation-test', version: '1' });
   try {
     await client.connect(transport);
-    assert.equal((await client.listTools()).tools.length, 11);
+    assert.equal((await client.listTools()).tools.length, 12);
   } finally { await client.close(); }
   await stopDaemon({ manual: true });
 });

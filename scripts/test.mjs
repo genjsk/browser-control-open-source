@@ -7,7 +7,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 await mkdir(path.join(root, '.local'), { recursive: true });
 const dataDir = await mkdtemp(path.join(root, '.local', 'test-data-'));
 const browser = process.argv.includes('--browser');
-const args = browser ? [path.join(root, 'tests', 'browser.mjs')] : ['--test', 'tests/bridge.test.mjs', 'tests/client.test.mjs', 'tests/portable.test.mjs', 'tests/paths.test.mjs', 'tests/migration.test.mjs', 'tests/codex-plugin.test.mjs'];
+const args = browser ? [path.join(root, 'tests', 'browser.mjs')] : ['--test', 'tests/bridge.test.mjs', 'tests/client.test.mjs', 'tests/portable.test.mjs', 'tests/paths.test.mjs', 'tests/migration.test.mjs', 'tests/codex-plugin.test.mjs', 'tests/typing.test.mjs'];
 const child = spawn(process.execPath, args, {
   cwd: root, stdio: 'inherit', windowsHide: true,
   env: { ...process.env, BROWSER_CONTROL_DATA_DIR: dataDir, BROWSER_BRIDGE_PORT: browser ? '19517' : '19543' }

@@ -8,6 +8,8 @@ The HTTP control endpoint requires a per-user admin token. The extension socket 
 
 Tab authorization is bound to the browser instance, tab and exact origin. Permission changes cancel queued actions. Losing the channel pauses control; recovery does not resume old tasks. Manually disconnecting persists until explicit reconnection. A command that has already executed cannot be undone by pausing.
 
+Character-by-character typing is opt-in. It uses Chrome's `debugger` permission to send browser-level input events through the DevTools protocol; Chrome shows a debugging infobar while a request is attached, and the debugger connection is released when the request finishes or aborts. The user must enable it in the extension settings and accept the permission in the browser. This is still browser-level simulation, not an operating-system hardware keyboard: pages that require user activation or a physical keyboard may reject it. The extension reports that failure and does not bypass site protections. Typed text is not written to extension logs, recent-action labels or tool results; only character counts and verification state are returned.
+
 ## Content and privacy
 
 Page content is untrusted data, not an instruction. MCP descriptions tell the client to honor user scope and its own approval policy. This is guidance to the host AI, not an independent classifier that can reliably recognize every payment, deletion or submission button.

@@ -95,7 +95,7 @@ export async function startDaemon({ listenPort = port, keys = null } = {}) {
       const body = await readBody();
       const command = JSON.parse(body);
       if (typeof command.action !== 'string' || !command.args || typeof command.args !== 'object') return send(400, { error: 'INVALID_COMMAND', code: 'INVALID_COMMAND' });
-      const allowed = ['tabs', 'snapshot', 'click', 'fill', 'press_key', 'scroll', 'navigate', 'select_tab', 'screenshot', 'wait'];
+      const allowed = ['tabs', 'snapshot', 'click', 'fill', 'press_key', 'type_text', 'scroll', 'navigate', 'select_tab', 'screenshot', 'wait'];
       if (!allowed.includes(command.action)) return send(400, { error: 'UNKNOWN_ACTION', code: 'UNKNOWN_ACTION' });
       if (command.action !== 'tabs' && (!Number.isInteger(command.args.tabId) || command.args.browserId !== status.browserId)) return send(400, { error: 'INVALID_TARGET', code: 'INVALID_TARGET' });
       if (!peer) return send(409, {

@@ -130,6 +130,26 @@ test('指令按标签页串行执行且不会自动重发', async t => {
   assert.equal(new Set(arrivals).size, 2);
 });
 
+test('type_text 在允许列表内，完整参数与结果经桥接返回', async t => {
+  const f = await fixture(t);
+  const ws = await f.ready();
+  let received = null;
+  ws.on('message', raw => {
+    const message = JSON.parse(raw);
+    if (message.type !== 'command') return;
+    received = message;
+    ws.send(JSON.stringify({ type: 'result', requestId: message.requestId, result: { complete: true, typedCharacters: 2 } }));
+  });
+  const response = await f.command('type_text', { browserId: 'test-browser', tabId: 10, frameId: 0, snapshotId: 's1', elementId: 'e1', text: '你好', delayMs: 5 });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(received.action, 'type_text');
+  assert.equal(received.args.text, '你好');
+  assert.equal(received.args.delayMs, 5);
+  assert.equal(body.result.complete, true);
+  assert.equal(body.verification.portMatches, true);
+});
+
 test('暂停时拒绝动作并拒绝错误浏览器目标', async t => {
   const f = await fixture(t);
   const ws = await f.ready();
