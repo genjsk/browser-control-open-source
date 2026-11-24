@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 - 新增 `browser_type_text` 逐字键盘输入：通过 Chrome DevTools Protocol 的 `Input` 能力发送浏览器级按键；普通 ASCII 使用 keydown/keypress/keyup，中文、emoji 等使用文本/IME 输入路径；支持 input、textarea、contenteditable，不自动提交表单。
 - 扩展新增 `debugger` 权限，并在设置页提供逐字输入用途说明和明确同意开关；Chrome 调试提示条和新增权限提示会在文档中说明，用户不启用时快速填入不受影响。

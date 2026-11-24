@@ -23,10 +23,11 @@ npm ci --cache .local/npm-cache
 python -m pip install -r requirements-build.txt
 python scripts/build-gui.py
 npm run package:portable
+python scripts/build-installer.py
 npm run package:source
 ```
 
-将 `release/*.zip` 与对应的 `.sha256` 上传到 GitHub Releases。源码包适合开发者，Windows 便携包适合普通用户。本机临时构建位置仅记录在被 Git 忽略的 `.local`，不放进发布目录。
+将 `release/*.zip`、`release/*-setup.exe` 与对应的 `.sha256` 上传到 GitHub Releases。安装程序包含完整 Windows x64 便携包，可离线安装。本机临时构建位置在被 Git 忽略的 `.local`，不放进发布目录。
 
 便携包由明确白名单构建，包含 `_internal`、Node.js、生产依赖和扩展；不包含 `.local`、浏览器配置或配对信息。发布脚本会审计这些内容。
 
