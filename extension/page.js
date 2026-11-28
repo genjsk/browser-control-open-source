@@ -18,10 +18,16 @@
     return node.matches('input[type="password"],input[type="hidden"],input[type="file"]') ||
       /password|one-time-code|cc-number|cc-csc/.test(node.getAttribute('autocomplete') || '');
   }
+  function privateNode(node) {
+    for (let current = node; current; current = current.getRootNode().host) {
+      if (current.closest('[data-private]')) return true;
+    }
+    return secret(node);
+  }
   function label(node) {
     return String(node.getAttribute('aria-label') || node.labels?.[0]?.innerText || node.getAttribute('placeholder') || node.innerText || node.getAttribute('title') || node.getAttribute('name') || '').replace(/\s+/g, ' ').trim().slice(0, 160);
   }
-  function bodyText(maxText) {
+  function readBodyText(maxText, offset = 0) {
     // innerText does not include password input values or script text; redact marked private regions.
     const selection = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, {
       acceptNode(text) {
@@ -30,17 +36,27 @@
         return NodeFilter.FILTER_ACCEPT;
       }
     });
-    let result = '', node;
-    while ((node = selection.nextNode()) && result.length < maxText) result += `${node.textContent.trim()} `;
-    return result.replace(/\s+/g, ' ').trim().slice(0, maxText);
+    const end = offset + maxText;
+    let text = '', length = 0, node;
+    while (length <= end && (node = selection.nextNode())) {
+      const value = node.textContent.replace(/\s+/g, ' ').trim();
+      if (!value) continue;
+      const chunk = length ? ' ' + value : value;
+      if (length + chunk.length > offset && length < end) {
+        text += chunk.slice(Math.max(0, offset - length), end - length);
+      }
+      length += chunk.length;
+    }
+    return { text, nextTextOffset: length > end ? end : null };
   }
-  function find(args) {
+  function find(args, allowDisabled = false) {
     if (!snapshotId || args.snapshotId !== snapshotId) throw new Error('STALE_SNAPSHOT: 页面已刷新或快照已失效，请重新读取页面。');
     const entry = elements.get(args.elementId);
     if (!entry || !entry.node.isConnected) throw new Error('ELEMENT_UNAVAILABLE: 元素已被移除，请重新读取页面。');
     const node = entry.node;
     if (!visible(node)) throw new Error('ELEMENT_UNAVAILABLE');
-    if (node.disabled || node.getAttribute('aria-disabled') === 'true') throw new Error('ELEMENT_DISABLED');
+    if (privateNode(node)) throw new Error('PRIVATE_FIELD');
+    if (!allowDisabled && (node.disabled || node.getAttribute('aria-disabled') === 'true')) throw new Error('ELEMENT_DISABLED');
     if (label(node) !== entry.label) throw new Error('STALE_SNAPSHOT: 目标元素内容已变化，请重新读取页面。');
     return node;
   }
@@ -121,33 +137,87 @@
     selection.removeAllRanges();
     selection.addRange(range);
   }
-  globalThis.__gptBrowserPage = async (action, args) => {
-    if (action === 'snapshot') {
+  function elementSummary(elementId, node, text) {
+    return {
+      elementId, tag: node.tagName.toLowerCase(), label: text,
+      role: node.getAttribute('role') || undefined, type: node.getAttribute('type') || undefined,
+      disabled: node.disabled || node.getAttribute('aria-disabled') === 'true' ? true : undefined
+    };
+  }
+  function snapshot(args) {
+    if ((args.offset ?? 0) > 0 && args.snapshotId === undefined) throw new Error('SNAPSHOT_ID_REQUIRED: 控件翻页需要当前快照 ID。');
+    if (args.snapshotId !== undefined) {
+      if (!snapshotId || args.snapshotId !== snapshotId) throw new Error('STALE_SNAPSHOT: 请重新读取页面后再翻页。');
+    } else {
       elements.clear();
       typing = null;
       snapshotId = crypto.randomUUID();
-      const interactive = [];
       for (const node of deepElements(document)) {
-        if (!visible(node) || secret(node) || node.closest('[data-private]')) continue;
+        if (!visible(node) || privateNode(node)) continue;
         const elementId = `e${elements.size + 1}`;
-        const text = label(node);
-        elements.set(elementId, { node, label: text });
-        interactive.push({
-          elementId, tag: node.tagName.toLowerCase(), role: node.getAttribute('role'), label: text,
-          type: node.getAttribute('type'), disabled: !!node.disabled, checked: node.matches('input[type="checkbox"],input[type="radio"]') ? node.checked : undefined,
-          value: node.matches('input,textarea,select') ? String(node.value).slice(0, 500) : undefined,
-          options: node.tagName === 'SELECT' ? [...node.options].slice(0, 80).map(option => ({ value: option.value, label: option.label })) : undefined
-        });
+        elements.set(elementId, { node, label: label(node) });
       }
-      return { snapshotId, title: document.title, url: location.href, text: bodyText(args.maxText || 8000), elements: interactive, contentTrust: 'untrusted-page-data' };
     }
-    if (action === 'probe') return { ready: document.readyState !== 'loading', found: args.text ? bodyText(200000).includes(args.text) : true, url: location.href };
+    const query = args.query?.trim().toLowerCase();
+    const offset = args.offset ?? 0;
+    const limit = args.limit ?? 20;
+    const summaries = [];
+    let totalElements = 0;
+    for (const [elementId, entry] of elements) {
+      if (query && !entry.label.toLowerCase().includes(query)) continue;
+      if (totalElements >= offset && totalElements < offset + limit &&
+          visible(entry.node) && !privateNode(entry.node) && label(entry.node) === entry.label) {
+        summaries.push(elementSummary(elementId, entry.node, entry.label));
+      }
+      totalElements++;
+    }
+    const maxText = args.maxText ?? (query || offset > 0 ? 0 : 1500);
+    return {
+      snapshotId, title: document.title, url: location.href,
+      ...(maxText > 0 ? readBodyText(maxText, args.textOffset ?? 0) : {}),
+      elements: summaries, totalElements, nextOffset: limit && offset + limit < totalElements ? offset + limit : null,
+      contentTrust: 'untrusted-page-data'
+    };
+  }
+  function inspect(args) {
+    const node = find(args, true);
+    const detail = elementSummary(args.elementId, node, label(node));
+    if (node.matches('input[type="checkbox"],input[type="radio"]')) {
+      detail.checked = node.checked;
+    } else if (node.isContentEditable && node.querySelector('[data-private]')) {
+      detail.valueRedacted = true;
+    } else if (node.matches('input,textarea,select') || node.isContentEditable) {
+      const value = node.matches('select') ? String(node.value) : textValue(node);
+      detail.value = value.slice(0, 500);
+      if (value.length > 500) detail.valueTruncated = true;
+    }
+    if (node.matches('select')) {
+      const offset = args.optionsOffset ?? 0;
+      const count = node.options.length;
+      detail.options = Array.from({ length: Math.min(25, Math.max(0, count - offset)) }, (_, index) => {
+        const option = node.options[offset + index];
+        return {
+          value: option.value.slice(0, 500), label: option.label.slice(0, 500),
+          truncated: option.value.length > 500 || option.label.length > 500 || undefined,
+          disabled: option.disabled || !!option.closest('optgroup[disabled]') || undefined
+        };
+      });
+      detail.optionCount = count;
+      detail.nextOptionsOffset = offset + detail.options.length < count ? offset + detail.options.length : null;
+    }
+    return { ...detail, contentTrust: 'untrusted-page-data' };
+  }
+  globalThis.__gptBrowserPage = async (action, args) => {
+    if (action === 'snapshot') return snapshot(args);
+    if (action === 'frame_info') return {};
+    if (action === 'inspect') return inspect(args);
+    if (action === 'probe') return { ready: document.readyState !== 'loading', found: args.text ? readBodyText(200000).text.includes(args.text) : true, url: location.href };
     if (action === 'scroll') { window.scrollBy({ left: args.x, top: args.y, behavior: 'instant' }); return { x: scrollX, y: scrollY, url: location.href }; }
     if (action === 'type_prepare') {
       const requested = find(args);
-      if (secret(requested) || requested.closest('[data-private]')) throw new Error('PRIVATE_FIELD');
       const editor = editorContent(requested);
       const node = editor ? editor.content : requested;
+      if (privateNode(node)) throw new Error('PRIVATE_FIELD');
       if (!editor && (requested.readOnly || requested.getAttribute('aria-readonly') === 'true')) throw new Error('FIELD_READONLY');
       if (!editor && requested.matches('input') && !['text', 'search', 'email', 'url', 'tel'].includes(requested.type)) throw new Error('UNSUPPORTED_INPUT_TYPE');
       if (!node.matches('input,textarea') && !node.isContentEditable) throw new Error('ELEMENT_NOT_EDITABLE');
@@ -200,15 +270,18 @@
       };
     }
     const node = find(args);
-    if (secret(node) || node.closest('[data-private]')) throw new Error('PRIVATE_FIELD');
     node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
     if (action === 'click') {
       node.click();
     } else if (action === 'fill') {
       if (node.readOnly) throw new Error('FIELD_READONLY');
       node.focus();
+      let expected = args.text;
+      let current = () => node.value;
       if (node.matches('input[type="checkbox"],input[type="radio"]')) {
         if (typeof args.checked !== 'boolean') throw new Error('CHECKED_REQUIRED');
+        expected = args.checked;
+        current = () => node.checked;
         if (node.checked !== args.checked) node.click();
       } else if (node.matches('select')) {
         if (typeof args.text !== 'string') throw new Error('TEXT_REQUIRED');
@@ -219,7 +292,8 @@
         const option = options.find(candidate => candidate.value === args.text)
           ?? options.find(candidate => candidate.label.trim() === wanted || candidate.textContent.trim() === wanted);
         if (!option) throw new Error('OPTION_NOT_FOUND');
-        node.value = option.value;
+        expected = option.value;
+        node.value = expected;
       } else if (node.matches('input,textarea')) {
         if (typeof args.text !== 'string') throw new Error('TEXT_REQUIRED');
         if (node.matches('input') && !['text', 'search', 'email', 'url', 'tel', 'number', 'date', 'datetime-local', 'time', 'month', 'week'].includes(node.type)) throw new Error('UNSUPPORTED_INPUT_TYPE');
@@ -227,10 +301,13 @@
         Object.getOwnPropertyDescriptor(prototype, 'value').set.call(node, args.text);
       } else if (node.isContentEditable) {
         if (typeof args.text !== 'string') throw new Error('TEXT_REQUIRED');
+        current = () => node.textContent;
         node.textContent = args.text;
       } else throw new Error('ELEMENT_NOT_EDITABLE');
       node.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       node.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      snapshotId = null;
+      return { executed: true, verified: node.isConnected && !privateNode(node) && current() === expected };
     } else if (action === 'press_key') {
       node.focus();
       const key = args.key === 'Space' ? ' ' : args.key;
@@ -245,6 +322,6 @@
       node.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, composed: true }));
     } else throw new Error('UNKNOWN_PAGE_ACTION');
     snapshotId = null;
-    return { executed: true, verified: false, url: location.href, next: 'Read a fresh snapshot to verify the result.' };
+    return { executed: true, verified: false, url: location.href };
   };
 })();

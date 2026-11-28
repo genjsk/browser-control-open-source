@@ -27,7 +27,11 @@ python scripts/build-installer.py
 npm run package:source
 ```
 
-将 `release/*.zip`、`release/*-setup.exe` 与对应的 `.sha256` 上传到 GitHub Releases。安装程序包含完整 Windows x64 便携包，可离线安装。本机临时构建位置在被 Git 忽略的 `.local`，不放进发布目录。
+将 `release/*.zip`、`release/*-setup.exe` 与对应的 `.sha256` 上传到 GitHub Releases。安装程序包含完整 Windows x64 便携包，可离线安装。构建安装器使用 Windows 自带的 .NET Framework C# 编译器。本机临时构建位置在被 Git 忽略的 `.local`，不放进发布目录。
+
+原地升级会在所选程序目录中创建隐藏的暂存目录。结束时会清理暂存文件，如需手动恢复失败的升级则保留备份。排查长时间未完成的安装时，记录窗口底部的当前步骤和解压计数。安装失败后，在可写的位置，错误对话框会列出同名 `.log` 文件的路径。
+
+如果用 r5 以管理员身份升级后，双击 `BrowserControl.exe` 提示拒绝访问，请用 r6 以管理员身份对同一目录执行原地替换，再用普通权限打开控制面板。r6 将按安装目录的权限写入程序文件。
 
 便携包由明确白名单构建，包含 `_internal`、Node.js、生产依赖和扩展；不包含 `.local`、浏览器配置或配对信息。发布脚本会审计这些内容。
 

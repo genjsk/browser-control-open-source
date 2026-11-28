@@ -19,7 +19,7 @@ async function scan(directory) {
       if (item.name !== 'node_modules' && item.name !== '_internal') await scan(file);
       continue;
     }
-    if (/^credentials.*\.json$|^disabled-\d+$|^ai-token-.*\.json$|^ai-instances\.json$|^identity-\d+\.json$|^storage-location\.json$|\.lnk$|^runtime\.json$|^settings\.json$/.test(item.name)) problems.push(`${rel}: local state file`);
+    if (/^credentials.*\.json$|^disabled-\d+$|^ai-token-.*\.json$|^ai-instances\.json$|^browser-routing-\d+\.json$|^identity-\d+\.json$|^storage-location\.json$|\.lnk$|^runtime\.json$|^settings\.json$/.test(item.name)) problems.push(`${rel}: local state file`);
     if (/\.(mjs|cjs|js|json|py|md|ya?ml|toml|cmd|sh|txt)$/.test(item.name)) {
       const text = await readFile(file, 'utf8');
       // Match actual secret VALUES, not variable/schema names.

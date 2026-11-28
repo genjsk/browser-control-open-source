@@ -29,10 +29,10 @@ async function fixture(t) {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...instance(identity, extraHeaders) },
     body: JSON.stringify({ action, args })
   });
-  async function connect(token = keys.extensionToken, origin = `chrome-extension://${'a'.repeat(32)}`) {
+  async function connect(token = keys.extensionToken, origin = `chrome-extension://${'a'.repeat(32)}`, browserId = 'test-browser', name) {
     const ws = new WebSocket(service.address.replace('http:', 'ws:') + '/extension', { origin });
     await once(ws, 'open');
-    ws.send(JSON.stringify({ type: 'hello', token, browserId: 'test-browser' }));
+    ws.send(JSON.stringify({ type: 'hello', token, browserId, name }));
     return ws;
   }
   async function ready() {
@@ -44,6 +44,48 @@ async function fixture(t) {
   }
   return { ...service, keys, servicePort, ai, other, request, instance, command, connect, ready };
 }
+
+test('多浏览器按 AI 实例路由，相同标签页 ID 不串线，离线不回退', async t => {
+  const f = await fixture(t);
+  const one = await f.ready();
+  const two = await f.connect(undefined, undefined, 'other-browser', '测试 Edge');
+  await once(two, 'message');
+  two.send(JSON.stringify({ type: 'state', paused: false, authorizedTabs: [{ tabId: 10, origin: 'https://test.example' }] }));
+  for (const [socket, browserId] of [[one, 'test-browser'], [two, 'other-browser']]) {
+    socket.on('message', data => {
+      const message = JSON.parse(data);
+      if (message.type === 'command') socket.send(JSON.stringify({ type: 'result', requestId: message.requestId, result: { browserId } }));
+    });
+  }
+  const adminBinding = (id, browserId) => f.request('/instances/browser', { id, browserId });
+  assert.equal((await f.request('/instances/browser', { id: f.ai.entry.id, browserId: 'other-browser' }, {
+    Authorization: '', ...f.instance(f.ai)
+  })).status, 404);
+  const unassigned = await f.command('tabs', {});
+  assert.equal((await unassigned.json()).code, 'BROWSER_NOT_ASSIGNED');
+  assert.equal((await adminBinding(f.ai.entry.id, 'unknown-browser')).status, 404);
+  assert.equal((await adminBinding(f.ai.entry.id, 'test-browser')).status, 200);
+  assert.equal((await adminBinding(f.other.entry.id, 'other-browser')).status, 200);
+  const [first, second] = await Promise.all([
+    f.command('snapshot', { browserId: 'test-browser', tabId: 10 }),
+    f.command('snapshot', { browserId: 'other-browser', tabId: 10 }, f.other)
+  ]);
+  assert.equal((await first.json()).result.browserId, 'test-browser');
+  assert.equal((await second.json()).result.browserId, 'other-browser');
+  assert.equal((await f.command('snapshot', { browserId: 'other-browser', tabId: 10 })).status, 400);
+  assert.equal((await f.command('tabs', { browserId: 'other-browser' })).status, 400);
+  const status = await (await f.request('/status', null, { Authorization: '', ...f.instance(f.other) })).json();
+  assert.equal(status.browserId, 'other-browser');
+  assert.ok(!('browsers' in status));
+  assert.deepEqual(status.authorizedTabs.map(tab => tab.origin), ['https://test.example']);
+  two.close();
+  await once(two, 'close');
+  assert.equal((await (await f.command('tabs', {}, f.other)).json()).code, 'BROWSER_OFFLINE');
+  const panel = await (await f.request('/status')).json();
+  assert.equal(panel.browsers.find(browser => browser.id === 'other-browser').connected, false);
+  assert.equal(panel.instances.find(instance => instance.id === f.other.entry.id).assignedBrowserId, 'other-browser');
+  assert.equal((await (await adminBinding(f.other.entry.id, null)).json()).effectiveBrowserId, null);
+});
 
 test('拒绝未认证请求、网页来源和伪造 Host', async t => {
   const f = await fixture(t);

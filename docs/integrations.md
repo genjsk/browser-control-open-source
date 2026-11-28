@@ -11,7 +11,22 @@
 - 配对凭据属于该端口，浏览器扩展连接到该服务；
 - 本地服务仍在运行。
 
-核对失败时不会执行浏览器操作，并返回插件配置端口、当前服务端口和失败原因。成功时工具结果包含 `verification`（`portMatches`、`pairing: "verified"`、`browserConnected` 等）。返回内容和日志都不包含配对码、配对密钥或网页内容。
+核对失败时不会执行浏览器操作，并返回插件配置端口、当前服务端口和失败原因。普通工具的 `verification` 包含两端端口、`portMatches`、`pairing` 和 `browserConnected`，`browser_status` 另有接入身份详情。核对信息和诊断日志不包含配对码或密钥。
+
+## 精简快照和局部核验
+
+- `browser_snapshot` 默认读取主文档（`frameId: 0`），最多返回 1,500 字符和 20 个控件。用 `query` 按标签搜索控件。控件搜索和翻页默认省略正文，可用 `maxText` 显式读取。
+- 控件翻页时把 `nextOffset` 作为 `offset`，继续使用同一 `frameId`、`snapshotId` 和 `query`。正文翻页用 `nextTextOffset` 作为 `textOffset`。设 `limit: 0` 只读正文，设 `maxText: 0` 只读控件。调用 `includeFrames: true` 可得到同源子框架 ID，再指定相应 `frameId` 单独读取。
+- `browser_inspect` 使用快照和控件 ID，只读取目标控件。下拉选项每次返回 25 项，用 `nextOptionsOffset` 继续读取。页面刷新、目标变化或已有写操作使快照失效时，先获取新的定向快照。
+- `browser_fill` 返回 `verified`，表示即时值是否与预期匹配。核验网页异步结果时，用 `browser_wait` 等待特定可见文字。它支持指定 `frameId`，无需重复读取整页。
+
+## 将不同 AI 分配给不同浏览器
+
+1. 在 Chrome、Edge 或多个独立的浏览器用户配置里安装扩展，用控制面板的同一配对码连接。每个配置可以在扩展的「连接设置」中设定名称。
+2. 在控制面板「AI 接入情况」选中一个实例，点击「选择浏览器」并保存。例如给 Codex 分配 Chrome，给 DSH 分配 Edge。
+3. 在每台目标浏览器的扩展里分别授权需要操作的标签页。
+
+仅配对一台浏览器时可以自动选择。配对多台后，未分配的 AI 调用会被拒绝。指定浏览器离线时，绑定保留，其他浏览器不会代替它。修改分配前可先等当前操作结束，已经在浏览器执行的操作无法撤回。绑定的是 AI 接入实例，同一个接入配置打开的多个会话共用一条分流规则。
 
 常见诊断：
 
@@ -46,7 +61,7 @@
 
 ## DeepSeek Harness
 
-面板“生成 DSH 插件”在当前用户数据目录生成一个有效的 Cordis bundle，并提供本机安装命令。可以在 DSH 添加本地插件，或运行生成的 `dsh plugin --profile web add ...` 命令。插件通过官方 `@deepseek-ai/dsh-mcp-client` 暴露 13 个工具，其中 `browser_type_text` 需要扩展内的逐字输入同意和 Chrome `debugger` 权限，且目标标签页必须在前台；`browser_eval` 需要单独的页面脚本执行同意和 `debugger` 权限，仅用于用户明确要求的页面操作。
+面板“生成 DSH 插件”在当前用户数据目录生成一个有效的 Cordis bundle，并提供本机安装命令。可以在 DSH 添加本地插件，或运行生成的 `dsh plugin --profile web add ...` 命令。插件通过官方 `@deepseek-ai/dsh-mcp-client` 暴露浏览器工具，其中 `browser_type_text` 需要扩展内的逐字输入同意和 Chrome `debugger` 权限，且目标标签页必须在前台；`browser_eval` 需要单独的页面脚本执行同意和 `debugger` 权限，仅用于用户明确要求的页面操作。
 
 生成后点击“复制插件地址”（在“打开插件目录”上方），将文件夹路径直接粘贴到 DSH 添加本地插件的位置即可。
 

@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { root, localDir } from '../bridge/config.mjs';
-import { ensureDaemon } from '../bridge/client.mjs';
+import { ensureDaemon, stopDaemon } from '../bridge/client.mjs';
 
 // Use Playwright's standard browser cache or PLAYWRIGHT_BROWSERS_PATH override.
 const { chromium } = await import('playwright');
@@ -47,7 +47,7 @@ try {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   await options.locator('#pairing-code').fill(`bc1:${testPort}:${extensionToken}`);
-  await options.locator('button[type=submit]').click();
+  await options.locator('#form button[type=submit]').click();
   await options.locator('#status').filter({ hasText: '已连接本地服务' }).waitFor();
   const page = await context.newPage(); await page.goto(url);
   const send = message => options.evaluate(async message => {
@@ -65,21 +65,123 @@ try {
   });
   async function snapshot() { return tool('browser_snapshot', target); }
   async function locate(label, tag) {
-    const snapshot = await tool('browser_snapshot', target);
-    for (const frame of snapshot.frames) {
-      const element = frame.elements?.find(element => element.label.includes(label) && (!tag || element.tag === tag));
-      if (element) return { ...target, frameId: frame.frameId, snapshotId: frame.snapshotId, elementId: element.elementId };
+    const args = { ...target, query: label, maxText: 0 };
+    const first = await tool('browser_snapshot', { ...args, includeFrames: true });
+    const frameIds = [0, ...first.availableFrames];
+    for (const frameId of frameIds) {
+      let frame = frameId === 0 ? first.frames[0] : (await tool('browser_snapshot', { ...args, frameId })).frames[0];
+      while (true) {
+        const element = frame.elements.find(element => !tag || element.tag === tag);
+        if (element) return { ...target, frameId, snapshotId: frame.snapshotId, elementId: element.elementId };
+        if (frame.nextOffset === null) break;
+        frame = (await tool('browser_snapshot', { ...args, frameId, snapshotId: frame.snapshotId, offset: frame.nextOffset })).frames[0];
+      }
     }
     throw new Error(`Element not found: ${label}`);
   }
   await step('MCP 工具发现和真实页面读取', async () => {
-    const tools = await client.listTools(); assert.ok(tools.tools.length >= 10);
+    const tools = await client.listTools(); assert.ok(tools.tools.some(tool => tool.name === 'browser_inspect'));
     const snap = await snapshot();
     assert.match(snap.frames[0].text, /浏览器控制验收页面/);
     assert.ok(!JSON.stringify(snap).includes('do-not-send'));
   });
+  await step('大型页面默认精简，控件和正文均可翻页，并可搜索末尾控件', async () => {
+    await page.evaluate(() => {
+      const section = document.createElement('section');
+      section.id = 'large-snapshot-test';
+      const paragraph = document.createElement('p');
+      paragraph.textContent = '示例文字 '.repeat(1800) + '正文结束标记';
+      section.append(paragraph);
+      for (let index = 0; index < 220; index++) {
+        const field = document.createElement('input');
+        field.setAttribute('aria-label', `批量字段 ${index}`);
+        field.value = '示例值'.repeat(160);
+        section.append(field);
+      }
+      const last = document.createElement('button');
+      last.textContent = '末尾独立按钮';
+      last.addEventListener('click', () => { paragraph.textContent = '末尾按钮已点击'; });
+      section.append(last);
+      document.body.append(section);
+    });
+    try {
+      const first = await snapshot();
+      const frame = first.frames[0];
+      assert.equal(first.frames.length, 1);
+      assert.equal(frame.frameId, 0);
+      assert.equal(frame.elements.length, 20);
+      assert.equal(frame.text.length, 1500);
+      assert.ok(frame.totalElements > 220);
+      assert.ok(frame.elements.every(element => !('value' in element) && !('options' in element)));
+      assert.ok(Buffer.byteLength(JSON.stringify(first)) < 8000);
+      assert.equal(first.verification.portMatches, true);
+      assert.equal(first.verification.pairing, 'verified');
+      assert.equal(first.verification.configuredPort, Number(testPort));
+      assert.equal(first.verification.servicePort, Number(testPort));
+      assert.ok(!('instanceName' in first.verification));
+      await assert.rejects(tool('browser_snapshot', { ...target, offset: frame.nextOffset }), /SNAPSHOT_ID_REQUIRED/);
+      const second = (await tool('browser_snapshot', { ...target, snapshotId: frame.snapshotId, offset: frame.nextOffset })).frames[0];
+      assert.equal(second.snapshotId, frame.snapshotId);
+      assert.equal(second.elements.length, 20);
+      assert.ok(!('text' in second));
+      assert.ok(!second.elements.some(element => frame.elements.some(firstElement => firstElement.elementId === element.elementId)));
+      const moreText = (await tool('browser_snapshot', { ...target, snapshotId: frame.snapshotId, limit: 0, maxText: 20000, textOffset: frame.nextTextOffset })).frames[0];
+      assert.deepEqual(moreText.elements, []);
+      assert.equal(moreText.nextTextOffset, null);
+      assert.match(moreText.text, /正文结束标记/);
+      const [match] = (await tool('browser_snapshot', { ...target, snapshotId: frame.snapshotId, query: '末尾独立按钮', maxText: 0 })).frames[0].elements;
+      assert.ok(match);
+      await tool('browser_click', { ...target, snapshotId: frame.snapshotId, elementId: match.elementId });
+      const signal = await tool('browser_wait', { ...target, text: '末尾按钮已点击', timeoutMs: 3000 });
+      assert.equal(signal.matched, true);
+      await assert.rejects(tool('browser_snapshot', { ...target, snapshotId: frame.snapshotId, offset: frame.nextOffset }), /STALE_SNAPSHOT/);
+    } finally {
+      await page.locator('#large-snapshot-test').evaluate(node => node.remove());
+    }
+  });
+  await step('局部控件详情、下拉选项翻页与隐私拒绝', async () => {
+    await page.locator('#choice').evaluate(node => {
+      for (let index = 0; index < 50; index++) node.add(new Option(`额外选项 ${index}`, `extra-${index}`));
+    });
+    try {
+      const select = await locate('选项', 'select');
+      const first = await tool('browser_inspect', select);
+      assert.equal(first.value, 'a');
+      assert.equal(first.optionCount, 52);
+      assert.equal(first.options.length, 25);
+      const second = await tool('browser_inspect', { ...select, optionsOffset: first.nextOptionsOffset });
+      assert.equal(second.options[0].value, 'extra-23');
+      const third = await tool('browser_inspect', { ...select, optionsOffset: second.nextOptionsOffset });
+      assert.equal(third.options.length, 2);
+      assert.equal(third.nextOptionsOffset, null);
+      const editor = await locate('逐字编辑器');
+      await page.locator('#typed-editor').evaluate(node => {
+        node.innerHTML = '<span data-private>do-not-send-inner</span>';
+      });
+      try {
+        const detail = await tool('browser_inspect', editor);
+        assert.equal(detail.valueRedacted, true);
+        assert.ok(!JSON.stringify(detail).includes('do-not-send-inner'));
+      } finally {
+        await page.locator('#typed-editor').evaluate(node => { node.textContent = ''; });
+      }
+      const field = await locate('搜索关键词', 'input');
+      await page.locator('#query').evaluate(node => node.setAttribute('data-private', ''));
+      try {
+        await assert.rejects(tool('browser_inspect', field), /PRIVATE_FIELD/);
+        const current = (await tool('browser_snapshot', { ...target, snapshotId: field.snapshotId, query: '搜索关键词', maxText: 0 })).frames[0];
+        assert.deepEqual(current.elements, []);
+      } finally {
+        await page.locator('#query').evaluate(node => node.removeAttribute('data-private'));
+      }
+    } finally {
+      await page.locator('#choice').evaluate(node => { node.options.length = 2; });
+    }
+  });
   await step('填写搜索框、点击搜索、读取真实结果', async () => {
-    await tool('browser_fill', { ...await locate('搜索关键词', 'input'), text: 'GPT 插件验收' });
+    const fill = await tool('browser_fill', { ...await locate('搜索关键词', 'input'), text: 'GPT 插件验收' });
+    assert.equal(fill.verified, true);
+    assert.ok(!JSON.stringify(fill).includes('GPT 插件验收'));
     await tool('browser_click', await locate('搜索', 'button'));
     await tool('browser_wait', { ...target, text: '搜索结果：GPT 插件验收', timeoutMs: 3000 });
     assert.match((await snapshot()).frames[0].text, /搜索结果：GPT 插件验收/);
@@ -107,7 +209,10 @@ try {
     await tool('browser_fill', { ...await locate('选项', 'select'), text: 'b' });
     await tool('browser_fill', { ...await locate('同意测试', 'input'), checked: true });
     await tool('browser_click', await locate('Shadow 按钮'));
-    await tool('browser_click', await locate('框架按钮'));
+    const framed = await locate('框架按钮');
+    assert.notEqual(framed.frameId, 0);
+    assert.equal((await tool('browser_wait', { ...target, frameId: framed.frameId, text: '框架按钮' })).matched, true);
+    await tool('browser_click', framed);
     assert.equal(await page.locator('#choice').inputValue(), 'b'); assert.equal(await page.locator('#check').isChecked(), true);
   });
   await step('逐字输入：未启用权限时明确拒绝，启用后逐字输入并核验', async () => {
@@ -308,6 +413,66 @@ try {
     await ensureDaemon({ explicit: true });
     for (let i = 0; i < 40; i++) { if ((await tool('browser_status')).connected) break; await new Promise(resolve => setTimeout(resolve, 200)); }
     const status = await tool('browser_status'); assert.equal(status.connected, true); assert.equal(status.paused, true);
+  });
+  await step('两个独立 Chromium 配置同时配对，按面板分配操作，目标离线时拒绝改走另一台', async () => {
+    const context2 = await chromium.launchPersistentContext(path.join(localDir, 'second-browser-profile'), {
+      channel: process.env.BROWSER_TEST_CHANNEL || 'chromium', headless: true,
+      args: [`--disable-extensions-except=${path.join(root, 'extension')}`, `--load-extension=${path.join(root, 'extension')}`]
+    });
+    try {
+      const worker2 = context2.serviceWorkers()[0] || await context2.waitForEvent('serviceworker');
+      const options2 = await context2.newPage();
+      await options2.goto(`chrome-extension://${new URL(worker2.url()).host}/options.html`);
+      await options2.locator('#browser-name[data-initialized=true]').fill('验收浏览器 B');
+      await options2.locator('#browser-form button').click();
+      await options2.locator('#message').filter({ hasText: '浏览器名称已保存。' }).waitFor();
+      await options2.locator('#pairing-code').fill(`bc1:${testPort}:${extensionToken}`);
+      await options2.locator('#form button[type=submit]').click();
+      await options2.locator('#status').filter({ hasText: '已连接本地服务' }).waitFor();
+      const page2 = await context2.newPage();
+      const url2 = `${url}/?second-browser`;
+      await page2.goto(url2);
+      await page2.evaluate(() => { document.querySelector('h1').textContent = '这是第二台浏览器'; });
+      const tab2 = await worker2.evaluate(async value => (await chrome.tabs.query({})).find(tab => tab.url === value), url2);
+      await options2.evaluate(async ({ id, origin }) => {
+        const result = await chrome.runtime.sendMessage({ type: 'grant', tabId: id, origin });
+        if (result.error) throw new Error(result.error);
+      }, { id: tab2.id, origin: url });
+      const admin = async (route, body) => {
+        const response = await fetch(`http://127.0.0.1:${testPort}${route}`, {
+          method: body ? 'POST' : 'GET',
+          headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+          body: body && JSON.stringify(body)
+        });
+        assert.ok(response.ok);
+        return response.json();
+      };
+      const panel = await admin('/status');
+      const id2 = panel.browsers.find(browser => browser.name === '验收浏览器 B').id;
+      assert.equal(panel.browsers.filter(browser => browser.connected).length, 2);
+      assert.notEqual(id2, target.browserId);
+      const sourceId = (await tool('browser_status')).verification.instance;
+      await assert.rejects(tool('browser_tabs'), /BROWSER_NOT_ASSIGNED/);
+      await admin('/instances/browser', { id: sourceId, browserId: id2 });
+      const list = await tool('browser_tabs');
+      assert.equal(list.browserId, id2);
+      assert.deepEqual(list.tabs.map(tab => tab.url), [url2]);
+      const result = await tool('browser_snapshot', { browserId: id2, tabId: tab2.id });
+      assert.match(result.frames[0].text, /这是第二台浏览器/);
+      await assert.rejects(snapshot(), /INVALID_TARGET/);
+      const saved = JSON.parse(await readFile(path.join(localDir, `browser-routing-${testPort}.json`), 'utf8'));
+      assert.equal(saved.assignments[sourceId], id2);
+      await options2.locator('#disconnect').click();
+      for (let index = 0; index < 25 && (await tool('browser_status')).connected; index++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      await assert.rejects(tool('browser_tabs'), /BROWSER_OFFLINE/);
+      await stopDaemon();
+      await ensureDaemon({ explicit: true });
+      await assert.rejects(tool('browser_tabs'), /BROWSER_OFFLINE/);
+      await admin('/instances/browser', { id: sourceId, browserId: target.browserId });
+      assert.equal((await tool('browser_status')).browserId, target.browserId);
+    } finally { await context2.close(); }
   });
   await mkdir(path.join(root, 'test-results'), { recursive: true });
   await page.screenshot({ path: path.join(root, 'test-results', '验收页面.png') });

@@ -55,6 +55,11 @@ try {
     const paused = command === 'ai-instance-pause';
     output = { instance: await setInstancePaused(id, paused), message: paused ? '已暂停该 AI 接入实例的调用。' : '已恢复该 AI 接入实例的调用。' };
   }
+  else if (command === 'ai-instance-browser') {
+    const [id, choice] = process.argv.slice(3, 5);
+    output = await api('/instances/browser', { id, browserId: choice === 'auto' ? null : choice });
+    output.message = choice === 'auto' ? '已恢复自动选择，仅配对一台浏览器时可用。' : '已保存此 AI 的浏览器分配。';
+  }
   else if (command === 'integrate-codex') output = await installCodex();
   else if (command === 'prepare-dsh') output = await prepareDsh();
   else if (command === 'prepare-codex-plugin') output = await (await import('./codex-plugin.mjs')).prepareCodexPlugin();
@@ -81,7 +86,7 @@ try {
     try { settings = JSON.parse(await readFile(path.join(localDir, 'settings.json'), 'utf8')); } catch {}
     await writeJson(path.join(localDir, 'settings.json'), { ...settings, port: nextPort });
     output = { port: nextPort, message: '端口已更新，请重新连接、重新配对浏览器，并重启 AI 客户端以加载新设置。' };
-  } else throw new Error('Commands: setup, start, stop, restart, status, info, ai-instances, ai-instance-pause <id>, ai-instance-resume <id>, integrate-codex, prepare-dsh, prepare-codex-plugin, install-codex-plugin, set-port <number>, migrate-storage <directory>');
+  } else throw new Error('Commands: setup, start, stop, restart, status, info, ai-instances, ai-instance-pause <id>, ai-instance-resume <id>, ai-instance-browser <id> <browserId|auto>, integrate-codex, prepare-dsh, prepare-codex-plugin, install-codex-plugin, set-port <number>, migrate-storage <directory>');
   console.log(json ? JSON.stringify(output) : (output.message || JSON.stringify(output, null, 2)));
 } catch (error) {
   console.error(json ? JSON.stringify({ error: error.message }) : error.message);

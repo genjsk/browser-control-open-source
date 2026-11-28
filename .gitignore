@@ -16,6 +16,7 @@ __pycache__/
 !.env.example
 credentials*.json
 ai-instances.json
+browser-routing-*.json
 ai-token-*.json
 identity-*.json
 disabled-*

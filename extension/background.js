@@ -9,9 +9,11 @@ let connectionError = '';
 let lastAction = '尚无操作';
 let state = { paused: true, grants: {} };
 let settings = {};
+const defaultBrowserName = /Edg\//.test(navigator.userAgent) ? 'Edge' : 'Chrome / Chromium';
+const browserName = () => settings.browserName || defaultBrowserName;
 const completed = new Map();
 const initialized = (async () => {
-  settings = await chrome.storage.local.get(['token', 'port', 'browserId', 'enabled', 'typingConsent', 'evalConsent']);
+  settings = await chrome.storage.local.get(['token', 'port', 'browserId', 'browserName', 'enabled', 'typingConsent', 'evalConsent']);
   if (!settings.browserId) { settings.browserId = crypto.randomUUID(); await chrome.storage.local.set({ browserId: settings.browserId }); }
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   const stored = await chrome.storage.session.get('control');
@@ -25,7 +27,7 @@ function updateBadge() {
   chrome.action.setBadgeBackgroundColor({ color: state.paused ? '#64748b' : '#0f766e' });
 }
 function publish() {
-  if (connected && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'state', paused: state.paused,
+  if (connected && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'state', paused: state.paused, name: browserName(),
     authorizedTabs: Object.entries(state.grants).map(([id, grant]) => ({ tabId: Number(id), origin: grant.origin })) }));
 }
 async function connect() {
@@ -35,7 +37,7 @@ async function connect() {
   clearTimeout(reconnect);
   const current = new WebSocket(`ws://127.0.0.1:${settings.port || 19487}/extension`);
   socket = current;
-  current.onopen = () => current.send(JSON.stringify({ type: 'hello', token: settings.token, browserId: settings.browserId }));
+  current.onopen = () => current.send(JSON.stringify({ type: 'hello', token: settings.token, browserId: settings.browserId, name: browserName() }));
   current.onmessage = async event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
@@ -332,13 +334,18 @@ async function execute(message) {
     return { selected: true, tabId: tab.id };
   }
   if (action === 'snapshot') {
-    const frames = await pageAction(tab.id, null, 'snapshot', args, grant, deadline);
+    const frames = await pageAction(tab.id, args.frameId ?? 0, 'snapshot', args, grant, deadline);
+    if (!frames.length || frames[0].error) throw new Error(frames[0]?.error || 'FRAME_UNAVAILABLE');
+    const availableFrames = args.includeFrames
+      ? (await pageAction(tab.id, null, 'frame_info', args, grant, deadline))
+          .filter(frame => !frame.error && frame.frameId !== 0).map(frame => frame.frameId)
+      : undefined;
     await assertTarget(args, deadline);
-    return { browserId: settings.browserId, tabId: tab.id, frames };
+    return { browserId: settings.browserId, tabId: tab.id, frames, availableFrames };
   }
-  if (['click', 'fill', 'press_key', 'scroll'].includes(action)) {
+  if (['click', 'fill', 'press_key', 'scroll', 'inspect'].includes(action)) {
     const values = await pageAction(tab.id, action === 'scroll' ? 0 : (args.frameId || 0), action, args, grant, deadline);
-    if (values[0]?.error) throw new Error(values[0].error);
+    if (!values.length || values[0].error) throw new Error(values[0]?.error || 'FRAME_UNAVAILABLE');
     return values[0];
   }
   if (action === 'navigate') {
@@ -351,7 +358,7 @@ async function execute(message) {
       // History destinations are unavailable to extensions without broader history access.
       throw new Error('HISTORY_NAVIGATION_UNSUPPORTED: 请提供已授权来源的明确 URL');
     } else throw new Error('INVALID_NAVIGATION_MODE');
-    return { initiated: true, verified: false, next: 'Wait for the page, then take a new snapshot.' };
+    return { initiated: true, verified: false };
   }
   if (action === 'screenshot') {
     const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
@@ -366,7 +373,7 @@ async function execute(message) {
     while (Date.now() < deadline) {
       await assertTarget(args, deadline);
       try {
-        const [probe] = await pageAction(tab.id, 0, 'probe', args, grant, deadline);
+        const [probe] = await pageAction(tab.id, args.frameId ?? 0, 'probe', args, grant, deadline);
         if (probe && !probe.error && probe.ready && probe.found) return { matched: true, url: probe.url };
       } catch (error) { if (/PAUSED|AUTHORIZED|ORIGIN_CHANGED/.test(error.message)) throw error; }
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -379,7 +386,14 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || ![chrome.runtime.getURL('popup.html'), chrome.runtime.getURL('options.html')].includes(sender.url)) return;
   (async () => {
     await initialized;
-    if (message.type === 'ui_status') return { connected, paused: state.paused, grants: state.grants, lastAction, connectionError, browserId: settings.browserId, typingConsent: !!settings.typingConsent, evalConsent: !!settings.evalConsent, debuggerPermission: await chrome.permissions.contains({ permissions: ['debugger'] }) };
+    if (message.type === 'ui_status') return { connected, paused: state.paused, grants: state.grants, lastAction, connectionError, browserId: settings.browserId, browserName: browserName(), typingConsent: !!settings.typingConsent, evalConsent: !!settings.evalConsent, debuggerPermission: await chrome.permissions.contains({ permissions: ['debugger'] }) };
+    if (message.type === 'browser_name') {
+      if (typeof message.name !== 'string' || message.name.length > 60 || /[\x00-\x1f\x7f]/.test(message.name)) throw new Error('浏览器名称最多 60 个字符。');
+      settings.browserName = message.name.trim();
+      await chrome.storage.local.set({ browserName: settings.browserName });
+      publish();
+      return { name: browserName() };
+    }
     if (message.type === 'typing_consent') {
       const enabled = !!message.enabled;
       if (enabled && !await chrome.permissions.contains({ permissions: ['debugger'] })) throw new Error('扩展尚未获得 debugger 权限，请重新加载扩展后再启用逐字输入。');

@@ -15,6 +15,14 @@ $('form').addEventListener('submit', async event => {
 $('disconnect').addEventListener('click', async () => {
   await send({ type: 'disconnect' }); $('message').textContent = '已断开并撤销授权。';
 });
+$('browser-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    const result = await send({ type: 'browser_name', name: $('browser-name').value });
+    $('browser-name').value = result.name;
+    $('message').textContent = '浏览器名称已保存。';
+  } catch (error) { $('message').textContent = error.message; }
+});
 $('eval-consent').addEventListener('change', async () => {
   const enabled = $('eval-consent').checked;
   try {
@@ -37,6 +45,11 @@ $('typing-consent').addEventListener('change', async () => {
 });
 async function refresh() {
   const state = await send({ type: 'ui_status' });
+  $('browser-identity').textContent = `${state.browserName} · ${state.browserId.slice(-8)}`;
+  if (!$('browser-name').dataset.initialized) {
+    $('browser-name').value = state.browserName;
+    $('browser-name').dataset.initialized = 'true';
+  }
   $('status').textContent = state.connected ? '已连接本地服务' : `尚未连接：${state.connectionError || '请填写配对信息'}`;
   $('status').classList.toggle('connected', state.connected);
   $('typing-consent').checked = !!state.typingConsent;

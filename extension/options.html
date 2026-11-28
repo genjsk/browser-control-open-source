@@ -6,6 +6,12 @@
 <label for="token">配对密钥</label><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="64 位配对密钥"></details>
 <div class="actions"><button type="submit">保存并连接</button><button id="disconnect" type="button" class="secondary">断开并撤销全部授权</button></div></form>
 <div id="status" class="status">正在检查连接…</div><p id="message" role="status"></p>
+<form id="browser-form">
+  <label for="browser-name">浏览器名称（用于控制面板分配）</label>
+  <input id="browser-name" maxlength="60" autocomplete="off" placeholder="如 Chrome 工作">
+  <div class="actions"><button type="submit" class="secondary">保存名称</button></div>
+  <p id="browser-identity" class="muted"></p>
+</form>
 <h2>逐字键盘输入（新增调试权限）</h2>
 <p class="muted">逐字输入通过 Chrome 的调试接口向已授权的标签页发送浏览器级键盘和文本输入，页面会收到 <code>isTrusted</code> 的 keydown、keypress 与 input 事件。启用后 Chrome 会在调试期间显示“正在调试此浏览器”的提示条；扩展更新后可能要求你在 <code>chrome://extensions</code> 接受新增的“调试程序”权限。该功能只操作你已授权的页面，不绕过网站保护，也不会自动提交表单。</p>
 <label class="consent" for="typing-consent"><input id="typing-consent" type="checkbox"> 我了解并允许在逐字输入期间使用 Chrome 调试权限</label>

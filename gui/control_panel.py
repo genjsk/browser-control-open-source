@@ -88,7 +88,7 @@ class BridgeController:
         return find_node(self.project)
 
     def run(self, mode: str, *arguments) -> dict:
-        if mode not in ('start', 'stop', 'restart', 'setup', 'info', 'integrate-codex', 'prepare-dsh', 'prepare-codex-plugin', 'install-codex-plugin', 'set-port', 'migrate-storage', 'ai-instance-pause', 'ai-instance-resume'):
+        if mode not in ('start', 'stop', 'restart', 'setup', 'info', 'integrate-codex', 'prepare-dsh', 'prepare-codex-plugin', 'install-codex-plugin', 'set-port', 'migrate-storage', 'ai-instance-pause', 'ai-instance-resume', 'ai-instance-browser'):
             raise ValueError('Unsupported operation')
         script = self.project / 'scripts' / 'cli.mjs'
         if not script.is_file():
@@ -150,7 +150,17 @@ class BridgeController:
 
     def status(self) -> dict:
         state = dict(running=False, connected=False, paused=True, tabs=0,
-                     instances=self.local_instances(), enabled=not self.disabled.exists(), error='')
+                     instances=self.local_instances(), browsers=[], enabled=not self.disabled.exists(), error='')
+        try:
+            routing = json.loads((self.local / f'browser-routing-{self.port}.json').read_text(encoding='utf-8'))
+            state['browsers'] = [dict(browser, connected=False) for browser in routing['browsers']]
+            assignments = routing['assignments']
+            only = state['browsers'][0]['id'] if len(state['browsers']) == 1 else None
+            for instance in state['instances']:
+                instance['assignedBrowserId'] = assignments.get(instance['id'])
+                instance['effectiveBrowserId'] = instance['assignedBrowserId'] or only
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            pass
         credentials = self.local / f'credentials-{self.port}.json'
         if not credentials.is_file():
             return self.settle_instances(state)
@@ -166,6 +176,8 @@ class BridgeController:
                          paused=payload.get('paused', True), tabs=len(payload.get('authorizedTabs', [])))
             if isinstance(payload.get('instances'), list):
                 state['instances'] = payload['instances']
+            if isinstance(payload.get('browsers'), list):
+                state['browsers'] = payload['browsers']
         except urllib.error.HTTPError as error:
             state['error'] = ('端口上的服务身份校验失败：可能属于其他 Browser Control 实例，或配对信息已变化。请重新连接。'
                               if error.code == 403 else f'无法读取状态（HTTP {error.code}）。')
@@ -196,6 +208,9 @@ class ControlPanel(tk.Tk):
         self.configure(bg='#f3f6fb')
         self.busy = False
         self.polling = False
+        self.service_running = False
+        self.browsers = {}
+        self.instances = {}
         self.events: queue.Queue = queue.Queue()
         self.last_error = ''
         self.last_output = None
@@ -248,16 +263,17 @@ class ControlPanel(tk.Tk):
         tk.Label(ai_header, text='安装记录与 MCP 会话状态分开显示', bg='white', fg='#94a3b8', font=('Microsoft YaHei UI', 9)).pack(side='right')
         table = tk.Frame(ai_card, bg='white')
         table.pack(fill='both', expand=True, pady=(8, 0))
-        self.ai_table = ttk.Treeview(table, columns=('client', 'transport', 'port', 'status', 'last'), show='headings', height=5, selectmode='browse')
+        self.ai_table = ttk.Treeview(table, columns=('client', 'transport', 'port', 'status', 'browser', 'last'), show='headings', height=5, selectmode='browse')
         for key, title, width, anchor in (
-            ('client', 'AI 客户端 / 实例', 290, 'w'),
-            ('transport', '接入方式', 190, 'w'),
-            ('port', '端口', 64, 'center'),
-            ('status', '状态', 74, 'center'),
-            ('last', '最近调用', 120, 'center'),
+            ('client', 'AI 客户端 / 实例', 216, 'w'),
+            ('transport', '接入方式', 112, 'w'),
+            ('port', '端口', 55, 'center'),
+            ('status', '状态', 62, 'center'),
+            ('browser', '控制浏览器', 194, 'w'),
+            ('last', '最近调用', 95, 'center'),
         ):
             self.ai_table.heading(key, text=title)
-            self.ai_table.column(key, width=width, anchor=anchor, stretch=key in ('client', 'transport'))
+            self.ai_table.column(key, width=width, anchor=anchor, stretch=key in ('client', 'browser'))
         table_scroll = ttk.Scrollbar(table, orient='vertical', command=self.ai_table.yview)
         self.ai_table.configure(yscrollcommand=table_scroll.set)
         self.ai_table.pack(side='left', fill='both', expand=True)
@@ -269,7 +285,9 @@ class ControlPanel(tk.Tk):
         self.pause_instance_button.pack(side='left')
         self.resume_instance_button = ttk.Button(ai_actions, text='恢复调用', command=lambda: self.pause_selected(False))
         self.resume_instance_button.pack(side='left', padx=8)
-        self.ai_hint = tk.Label(ai_actions, text='暂停由本地服务强制执行，其他 AI 实例不受影响。', bg='white', fg='#94a3b8',
+        self.assign_browser_button = ttk.Button(ai_actions, text='选择浏览器', command=self.choose_browser, state='disabled')
+        self.assign_browser_button.pack(side='left')
+        self.ai_hint = tk.Label(ai_actions, text='配对多台浏览器后，请为每个 AI 选择目标。', bg='white', fg='#94a3b8',
                                 font=('Microsoft YaHei UI', 9), wraplength=360, justify='right')
         self.ai_hint.pack(side='right')
         self.message = tk.Label(wrap, text=controller.storage_note if controller.storage_mode == 'fallback' else '连接后，请在浏览器扩展中授权要操作的网页。', bg='#f3f6fb', fg='#64748b', wraplength=770, justify='left', anchor='w')
@@ -326,7 +344,7 @@ class ControlPanel(tk.Tk):
         self.busy = True
         self.last_error = ''
         for button in (self.connect_button, self.disconnect_button, self.restart_button, self.pair_button,
-                       getattr(self, 'pause_instance_button', None), getattr(self, 'resume_instance_button', None)):
+                       self.pause_instance_button, self.resume_instance_button, self.assign_browser_button):
             if button is not None:
                 button.configure(state='disabled')
         self.message.configure(text={'start': '正在连接…', 'stop': '正在断开，等待服务退出…', 'restart': '正在重新连接…', 'migrate-storage': '正在断开服务、迁移并校验旧数据，请等待完成…', 'install-codex-plugin': '正在安装 Codex 本地插件…'}.get(mode, '正在准备…'), fg='#64748b')
@@ -356,10 +374,13 @@ class ControlPanel(tk.Tk):
     def render(self, state):
         self.address_label.configure(text=f'本机地址 127.0.0.1:{self.controller.port}')
         running, connected = state['running'], state['connected']
+        self.service_running = running
+        self.browsers = {entry['id']: entry for entry in state.get('browsers', [])}
+        active_count = sum(bool(browser.get('connected')) for browser in self.browsers.values())
         self.heading.configure(text='已连接浏览器' if connected else ('等待浏览器连接' if running else '已断开'), fg='#0f766e' if connected else '#64748b')
         for key, value in {
             'service': '运行中' if running else '未运行',
-            'browser': '已连接' if connected else '未连接',
+            'browser': f'{active_count} 台已连接' if active_count else ('已连接' if connected else '未连接'),
             'control': ('已暂停' if state['paused'] else '已启用') if connected else '不可用',
             'tabs': str(state['tabs']),
         }.items():
@@ -370,15 +391,16 @@ class ControlPanel(tk.Tk):
 
     def render_instances(self, instances):
         selected = self.ai_table.selection()
+        self.instances = {entry['id']: entry for entry in instances if entry.get('id')}
         self.ai_table.delete(*self.ai_table.get_children())
-        for entry in instances:
-            if not entry.get('id'):
-                continue
+        for entry in self.instances.values():
             status = {'online': '在线', 'offline': '离线', 'paused': '已暂停', 'installed': '已安装'}.get(entry.get('status'), entry.get('status', ''))
+            browser_id = entry.get('effectiveBrowserId')
+            browser = self.browser_label(browser_id) if browser_id else '未分配'
             self.ai_table.insert('', 'end', iid=entry['id'], values=(
                 f"{entry.get('client', '')} · {entry.get('name', '')}".strip(' ·'),
                 entry.get('transport', ''), entry.get('port', ''),
-                status, format_time(entry.get('lastCallAt')),
+                status, browser, format_time(entry.get('lastCallAt')),
             ))
         if selected and self.ai_table.exists(selected[0]):
             self.ai_table.selection_set(selected[0])
@@ -390,6 +412,42 @@ class ControlPanel(tk.Tk):
         available = not self.busy
         self.pause_instance_button.configure(state='normal' if available and status in ('在线', '离线', '已安装') else 'disabled')
         self.resume_instance_button.configure(state='normal' if available and status == '已暂停' else 'disabled')
+        self.assign_browser_button.configure(state='normal' if available and selection and self.service_running and self.browsers else 'disabled')
+
+    def browser_label(self, browser_id):
+        browser = self.browsers.get(browser_id, {})
+        state = '在线' if browser.get('connected') else '离线'
+        return f"{browser.get('name') or '浏览器'} · {browser_id[-8:]}（{state}）"
+
+    def choose_browser(self):
+        selection = self.ai_table.selection()
+        if self.busy or not selection or not self.service_running or not self.browsers:
+            return
+        instance = self.instances[selection[0]]
+        browser_ids = list(self.browsers)
+        current = instance.get('assignedBrowserId')
+        window = tk.Toplevel(self)
+        window.title('选择 AI 控制的浏览器')
+        window.transient(self)
+        window.resizable(False, False)
+        body = ttk.Frame(window, padding=20)
+        body.pack(fill='both', expand=True)
+        ttk.Label(body, text=instance['name'], wraplength=440).pack(anchor='w', pady=(0, 10))
+        combo = ttk.Combobox(body, state='readonly', width=46, values=[
+            '自动（仅配对一台浏览器时）', *(self.browser_label(browser_id) for browser_id in browser_ids)])
+        combo.current(browser_ids.index(current) + 1 if current in browser_ids else 0)
+        combo.pack(fill='x')
+
+        def save():
+            index = combo.current()
+            if index < 0:
+                return
+            window.destroy()
+            self.perform('ai-instance-browser', instance['id'], browser_ids[index - 1] if index else 'auto')
+
+        ttk.Button(body, text='保存分配', command=save).pack(anchor='e', pady=(12, 0))
+        window.grab_set()
+        combo.focus_set()
 
     def pause_selected(self, paused):
         selection = self.ai_table.selection()
